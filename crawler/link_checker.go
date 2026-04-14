@@ -3,10 +3,17 @@ package crawler
 import (
 	"context"
 	"net/http"
+	"golang.org/x/time/rate"
 )
 
 // checkLink проверяет доступность ссылки и возвращает информацию, если она "битая"
-func checkLink(ctx context.Context, client *http.Client, url string) *BrokenLink {
+func checkLink(ctx context.Context, client *http.Client, limiter *rate.Limiter, url string) *BrokenLink {
+	if limiter != nil {
+		if err := limiter.Wait(ctx); err != nil {
+			return &BrokenLink{URL: url, Error: err.Error()}
+		}
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return &BrokenLink{URL: url, Error: err.Error()}
@@ -19,11 +26,8 @@ func checkLink(ctx context.Context, client *http.Client, url string) *BrokenLink
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	// 4xx и 5xx считаем битыми ссылками
 	if resp.StatusCode >= 400 {
 		return &BrokenLink{URL: url, StatusCode: resp.StatusCode}
 	}
-
-	// Ссылка рабочая — возвращаем nil
 	return nil
 }

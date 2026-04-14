@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"golang.org/x/net/html"
+	"golang.org/x/time/rate"
 )
 
 type crawlTask struct {
@@ -29,6 +30,7 @@ type crawlEngine struct {
 	queue     chan crawlTask
 	results   []PageReport
 	resultMu  sync.Mutex
+	limiter   *rate.Limiter
 }
 
 // Analyze — точка входа в краулер.
@@ -56,6 +58,7 @@ func Analyze(ctx context.Context, opts Options) ([]byte, error) {
 		startHost: startURL.Hostname(),
 		visited:   make(map[string]bool),
 		queue:     make(chan crawlTask, 100),
+		limiter:   createLimiter(opts),
 	}
 
 	results, err := engine.run(ctx)
@@ -66,17 +69,38 @@ func Analyze(ctx context.Context, opts Options) ([]byte, error) {
 	return formatReport(opts.URL, opts.Depth, results, opts.IndentJSON)
 }
 
+// createLimiter создаёт rate.Limiter на основе Options.
+// Приоритет: RPS > Delay. Если оба не заданы — лимит бесконечный.
+func createLimiter(opts Options) *rate.Limiter {
+    var limit rate.Limit
+    var burst int
+    
+    if opts.RPS > 0 {
+        limit = rate.Limit(opts.RPS)
+        burst = opts.Concurrency // Используем concurrency как burst
+        if burst < 2 {
+            burst = 2
+        }
+        return rate.NewLimiter(limit, burst)
+    }
+    
+    if opts.Delay > 0 {
+        limit = rate.Limit(1.0 / opts.Delay.Seconds())
+        return rate.NewLimiter(limit, 1)
+    }
+    
+    return nil
+}
+
 func (e *crawlEngine) run(ctx context.Context) ([]PageReport, error) {
 	var taskWg sync.WaitGroup
 	var workerWg sync.WaitGroup
 
-	// Запуск пула воркеров
 	for i := 0; i < e.opts.Concurrency; i++ {
 		workerWg.Add(1)
 		go e.worker(ctx, &taskWg, &workerWg)
 	}
 
-	// Отправка стартовой задачи
 	normalizedStart := normalizeURL(e.opts.URL)
 	e.mu.Lock()
 	e.visited[normalizedStart] = true
@@ -85,13 +109,11 @@ func (e *crawlEngine) run(ctx context.Context) ([]PageReport, error) {
 	taskWg.Add(1)
 	e.queue <- crawlTask{url: e.opts.URL, depth: 0}
 
-	// Отдельная горутина закрывает очередь, когда все задачи выполнены
 	go func() {
 		taskWg.Wait()
 		close(e.queue)
 	}()
 
-	// Ждём завершения всех воркеров
 	workerWg.Wait()
 
 	e.resultMu.Lock()
@@ -104,21 +126,26 @@ func (e *crawlEngine) worker(ctx context.Context, taskWg *sync.WaitGroup, worker
 	defer workerWg.Done()
 
 	for task := range e.queue {
+		// Проверяем наличие лимитера перед ожиданием
+		if e.limiter != nil {
+			if err := e.limiter.Wait(ctx); err != nil {
+				taskWg.Done()
+				continue
+			}
+		}
 		if ctx.Err() != nil {
 			taskWg.Done()
 			continue
 		}
 
-		page, links := crawlPage(ctx, e.client, task.url, task.depth, e.opts)
+		page, links := crawlPage(ctx, e.client, e.limiter, task.url, task.depth, e.opts)
 
 		e.resultMu.Lock()
 		e.results = append(e.results, page)
 		e.resultMu.Unlock()
 
-		// Планируем следующие задачи, если глубина позволяет
 		if task.depth+1 < e.opts.Depth {
 			for _, link := range links {
-				// 🆕 Исправлен shadowing: используем pErr вместо err
 				parsed, pErr := url.Parse(link)
 				if pErr != nil || parsed.Hostname() != e.startHost {
 					continue
@@ -174,7 +201,7 @@ func formatReport(rootURL string, depth int, results []PageReport, indentJSON bo
 	return json.MarshalIndent(report, "", indent)
 }
 
-func crawlPage(ctx context.Context, client *http.Client, url string, depth int, opts Options) (PageReport, []string) {
+func crawlPage(ctx context.Context, client *http.Client, limiter *rate.Limiter, url string, depth int, opts Options) (PageReport, []string) {
 	report := PageReport{URL: url, Depth: depth}
 	if ctx.Err() != nil {
 		report.Status = "skipped"
@@ -193,7 +220,7 @@ func crawlPage(ctx context.Context, client *http.Client, url string, depth int, 
 	report.HTTPStatus = resp.StatusCode
 	report.Status = "ok"
 
-	links := analyzePageContent(ctx, client, resp.Body, opts.URL, &report, opts)
+	links := analyzePageContent(ctx, client, limiter, resp.Body, opts.URL, &report, opts)
 	report.DiscoveredAt = time.Now().UTC()
 	return report, links
 }
@@ -232,6 +259,7 @@ func fetchWithRetries(ctx context.Context, client *http.Client, url string, opts
 func analyzePageContent(
 	ctx context.Context,
 	client *http.Client,
+	limiter *rate.Limiter,
 	body io.Reader,
 	baseURL string,
 	report *PageReport,
@@ -252,7 +280,8 @@ func analyzePageContent(
 		if ctx.Err() != nil {
 			break
 		}
-		if broken := checkLink(ctx, client, link); broken != nil {
+		// Передаём лимитер в checkLink
+		if broken := checkLink(ctx, client, limiter, link); broken != nil {
 			report.BrokenLinks = append(report.BrokenLinks, *broken)
 		}
 	}

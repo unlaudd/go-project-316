@@ -7,8 +7,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"sync"
 	"time"
 	"strings"
+	"fmt"
 )
 
 // mockTransport имитирует сетевые сбои на уровне транспортного слоя
@@ -554,5 +556,60 @@ func TestAnalyze_ContextCancellation(t *testing.T) {
 	// RootURL должен совпадать
 	if report.RootURL != server.URL {
 		t.Errorf("RootURL = %q, want %q", report.RootURL, server.URL)
+	}
+}
+
+func TestAnalyze_RateLimiting(t *testing.T) {
+	var (
+		reqMu   sync.Mutex
+		reqTimes []time.Time
+		linkIdx int
+	)
+
+	// Хендлер генерирует уникальные ссылки, чтобы краулер не упирался в дедупликацию
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		reqMu.Lock()
+		reqTimes = append(reqTimes, time.Now())
+		linkIdx++
+		reqMu.Unlock()
+
+		time.Sleep(5 * time.Millisecond) // Форсируем yield планировщика
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `<a href="/p%d">next</a>`, linkIdx)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", handler)
+	mux.HandleFunc("/p", handler) // матчит /p1, /p2...
+
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	// Ограничиваем время работы краулера ровно 1 секундой
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	opts := DefaultOptions()
+	opts.URL = server.URL
+	opts.Depth = 50      // Глубокий обход, чтобы не упёрлись в лимит глубины
+	opts.Concurrency = 1 // Один воркер для предсказуемого измерения
+	opts.RPS = 5         // Лимит: 5 запросов в секунду
+
+	_, err := Analyze(ctx, opts)
+	if err != nil && err != context.DeadlineExceeded {
+		t.Fatal(err)
+	}
+
+	reqMu.Lock()
+	count := len(reqTimes)
+	reqMu.Unlock()
+
+	// При 5 RPS и burst=1 за 1 секунду максимум должно быть ~6 запросов
+	// Даём небольшой запас на инициализацию
+	if count > 8 {
+		t.Errorf("expected <= 8 requests in 1s at 5 RPS, got %d (rate limit not enforced)", count)
+	}
+	if count < 2 {
+		t.Errorf("too few requests executed: %d", count)
 	}
 }
