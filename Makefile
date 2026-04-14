@@ -15,9 +15,8 @@ help:
 	@echo "  make install-tools  - install golangci-lint v2"
 
 install-tools:
-	@echo "Installing golangci-lint v2..."
-	@which golangci-lint > /dev/null 2>&1 || \
-		(curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $$(go env GOPATH)/bin v2.0.0)
+	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | \
+		sh -s -- -b $$(go env GOPATH)/bin v2.1.0
 
 build:
 	@echo "Building $(BINARY_NAME)..."

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+	"strings"
 )
 
 // mockTransport имитирует сетевые сбои на уровне транспортного слоя
@@ -123,5 +124,162 @@ func TestAnalyze_HTTPLogic(t *testing.T) {
 				t.Errorf("page status = %q, want %q", page.Status, tt.wantStatus)
 			}
 		})
+	}
+}
+
+func TestAnalyze_BrokenLinks(t *testing.T) {
+	mux := http.NewServeMux()
+
+	// 1. Главная страница со ссылками
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`
+			<html>
+				<body>
+					<a href="/ok">Working</a>
+					<a href="/missing">Broken</a>
+					<a href="mailto:test@example.com">Email</a>
+					<a href="#anchor">Anchor</a>
+				</body>
+			</html>
+		`))
+	})
+
+	// 2. Рабочая ссылка (200)
+	mux.HandleFunc("/ok", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
+	})
+
+	// 3. Битая ссылка (404)
+	mux.HandleFunc("/missing", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	ctx := context.Background()
+	opts := DefaultOptions()
+	opts.URL = server.URL
+	opts.Depth = 1
+	opts.IndentJSON = true
+	opts.HTTPClient = &http.Client{Timeout: 5 * time.Second}
+
+	result, err := Analyze(ctx, opts)
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+
+	var report Report
+	if err := json.Unmarshal(result, &report); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+
+	if len(report.Pages) != 1 {
+		t.Fatalf("expected 1 page, got %d", len(report.Pages))
+	}
+
+	page := report.Pages[0]
+
+	// Должна быть ровно одна битая ссылка
+	if len(page.BrokenLinks) != 1 {
+		t.Errorf("expected 1 broken link, got %d: %+v", len(page.BrokenLinks), page.BrokenLinks)
+	}
+
+	if len(page.BrokenLinks) > 0 {
+		broken := page.BrokenLinks[0]
+		if !strings.HasSuffix(broken.URL, "/missing") {
+			t.Errorf("broken link URL = %q, want suffix /missing", broken.URL)
+		}
+		if broken.StatusCode != http.StatusNotFound {
+			t.Errorf("broken link status = %d, want %d", broken.StatusCode, http.StatusNotFound)
+		}
+	}
+}
+
+func TestAnalyze_BrokenLinks_NetworkError(t *testing.T) {
+	// Страница со ссылкой на несуществующий домен
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`<a href="https://nonexistent.invalid/path">Dead</a>`))
+	})
+
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	opts := DefaultOptions()
+	opts.URL = server.URL
+	opts.Depth = 1
+	opts.HTTPClient = &http.Client{Timeout: 1 * time.Second}
+
+	result, err := Analyze(ctx, opts)
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+
+	var report Report
+	if err := json.Unmarshal(result, &report); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+
+	if len(report.Pages) != 1 {
+		t.Fatalf("expected 1 page, got %d", len(report.Pages))
+	}
+
+	page := report.Pages[0]
+	if len(page.BrokenLinks) != 1 {
+		t.Errorf("expected 1 broken link (network error), got %d", len(page.BrokenLinks))
+	}
+
+	if len(page.BrokenLinks) > 0 {
+		broken := page.BrokenLinks[0]
+		if broken.Error == "" {
+			t.Error("expected error message for network failure")
+		}
+		if broken.StatusCode != 0 {
+			t.Error("status_code should be 0 for network errors")
+		}
+	}
+}
+
+func TestAnalyze_IgnoresUnsupportedSchemes(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		// Ссылки, которые должны быть проигнорированы
+		_, _ = w.Write([]byte(`
+			<a href="mailto:test@example.com">Email</a>
+			<a href="tel:+1234567890">Phone</a>
+			<a href="javascript:void(0)">JS</a>
+			<a href="ftp://example.com/file">FTP</a>
+			<a href="#section">Anchor</a>
+			<a href="">Empty</a>
+		`))
+	})
+
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	ctx := context.Background()
+	opts := DefaultOptions()
+	opts.URL = server.URL
+	opts.Depth = 1
+
+	result, err := Analyze(ctx, opts)
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+
+	var report Report
+	if err := json.Unmarshal(result, &report); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+
+	// Никаких битых ссылок быть не должно — все проигнорированы
+	if len(report.Pages[0].BrokenLinks) != 0 {
+		t.Errorf("expected no broken links (all unsupported), got: %+v", report.Pages[0].BrokenLinks)
 	}
 }

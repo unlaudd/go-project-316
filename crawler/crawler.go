@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"golang.org/x/net/html"
 )
 
 // Analyze — точка входа в краулер.
@@ -110,15 +112,34 @@ func crawlPage(ctx context.Context, client *http.Client, url string, depth int, 
 		return report
 	}
 	defer func() {
-    	if closeErr := resp.Body.Close(); closeErr != nil {
-        	// Логируем, но не прерываем выполнение — тело уже прочитано
-        	// В продакшене здесь можно использовать logger.Warn(closeErr)
-        	_ = closeErr
-    	}
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			_ = closeErr
+		}
 	}()
 
 	report.HTTPStatus = resp.StatusCode
 	report.Status = "ok"
+
+	doc, parseErr := html.Parse(resp.Body)
+	if parseErr != nil {
+		// Ошибка парсинга не ломает страницу — просто не проверяем ссылки
+		// В реальном проекте: logger.Warn("failed to parse HTML", parseErr)
+	} else {
+		// Извлекаем и проверяем ссылки
+		links := extractLinks(opts.URL, doc)
+		for _, link := range links {
+    		// Проверяем отмену контекста без select/break
+    		if ctx.Err() != nil {
+        		break
+    		}
+
+    		if broken := checkLink(ctx, client, link); broken != nil {
+        		report.BrokenLinks = append(report.BrokenLinks, *broken)
+    		}
+		}
+	}
+	
+	report.DiscoveredAt = time.Now().UTC()
 
 	return report
 }
