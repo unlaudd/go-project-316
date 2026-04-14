@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -56,90 +57,98 @@ func Analyze(ctx context.Context, opts Options) ([]byte, error) {
 	return result, nil
 }
 
-// crawlPage выполняет запрос к одной странице и возвращает отчёт о ней
+// crawlPage выполняет запрос к странице и собирает отчёт
 func crawlPage(ctx context.Context, client *http.Client, url string, depth int, opts Options) PageReport {
-	report := PageReport{
-		URL:   url,
-		Depth: depth,
-	}
+	report := PageReport{URL: url, Depth: depth}
 
-	// Проверка контекста перед запросом
-	select {
-	case <-ctx.Done():
+	// Проверка контекста
+	if err := ctx.Err(); err != nil {
 		report.Status = "skipped"
-		report.Error = ctx.Err().Error()
-		return report
-	default:
-	}
-
-	// Создание запроса
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		report.Status = "error"
-		report.Error = fmt.Sprintf("failed to create request: %v", err)
+		report.Error = err.Error()
 		return report
 	}
 
-	// Установка User-Agent
-	if opts.UserAgent != "" {
-		req.Header.Set("User-Agent", opts.UserAgent)
-	} else {
-		req.Header.Set("User-Agent", "hexlet-go-crawler/1.0")
-	}
-
-	// Выполнение запроса с повторами
-	var resp *http.Response
-	for attempt := 0; attempt <= opts.Retries; attempt++ {
-		resp, err = client.Do(req)
-		if err == nil {
-			break
-		}
-		if attempt < opts.Retries {
-			// Простая задержка между попытками
-			select {
-			case <-ctx.Done():
-				report.Status = "skipped"
-				report.Error = ctx.Err().Error()
-				return report
-			case <-time.After(opts.Delay):
-			}
-		}
-	}
-
+	// Выполняем запрос с повторами
+	resp, err := fetchWithRetries(ctx, client, url, opts)
 	if err != nil {
 		report.Status = "error"
 		report.Error = fmt.Sprintf("request failed: %v", err)
 		return report
 	}
-	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			_ = closeErr
-		}
-	}()
+	defer func() { _ = resp.Body.Close() }()
 
 	report.HTTPStatus = resp.StatusCode
 	report.Status = "ok"
 
-	doc, parseErr := html.Parse(resp.Body)
-	if parseErr != nil {
-		// Ошибка парсинга не ломает страницу — просто не проверяем ссылки
-		// В реальном проекте: logger.Warn("failed to parse HTML", parseErr)
-	} else {
-		// Извлекаем и проверяем ссылки
-		links := extractLinks(opts.URL, doc)
-		for _, link := range links {
-    		// Проверяем отмену контекста без select/break
-    		if ctx.Err() != nil {
-        		break
-    		}
+	// Обрабатываем контент страницы
+	analyzePageContent(ctx, client, resp.Body, opts.URL, &report, opts)
 
-    		if broken := checkLink(ctx, client, link); broken != nil {
-        		report.BrokenLinks = append(report.BrokenLinks, *broken)
-    		}
+	report.DiscoveredAt = time.Now().UTC()
+	return report
+}
+
+// fetchWithRetries выполняет HTTP-запрос с повторами при ошибках
+func fetchWithRetries(ctx context.Context, client *http.Client, url string, opts Options) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	ua := opts.UserAgent
+	if ua == "" {
+		ua = "hexlet-go-crawler/1.0"
+	}
+	req.Header.Set("User-Agent", ua)
+
+	var resp *http.Response
+	var lastErr error
+
+	for attempt := 0; attempt <= opts.Retries; attempt++ {
+		resp, lastErr = client.Do(req)
+		if lastErr == nil {
+			return resp, nil
+		}
+		if attempt < opts.Retries {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(opts.Delay):
+				// продолжаем следующую попытку
+			}
 		}
 	}
-	
-	report.DiscoveredAt = time.Now().UTC()
+	return nil, lastErr
+}
 
-	return report
+// analyzePageContent парсит HTML, извлекает SEO и проверяет ссылки
+func analyzePageContent(
+	ctx context.Context,
+	client *http.Client,
+	body io.Reader,
+	baseURL string,
+	report *PageReport,
+	opts Options,
+) {
+	doc, err := html.Parse(body)
+	if err != nil {
+		// Ошибка парсинга не ломает страницу
+		return
+	}
+
+	// 🆕 Извлекаем SEO-метрики
+	seo := extractSEO(doc)
+	if seo.HasTitle || seo.HasDescription || seo.HasH1 {
+		report.SEO = seo
+	}
+
+	// Проверяем ссылки на "битость"
+	links := extractLinks(baseURL, doc)
+	for _, link := range links {
+		if ctx.Err() != nil {
+			break
+		}
+		if broken := checkLink(ctx, client, link); broken != nil {
+			report.BrokenLinks = append(report.BrokenLinks, *broken)
+		}
+	}
 }

@@ -283,3 +283,117 @@ func TestAnalyze_IgnoresUnsupportedSchemes(t *testing.T) {
 		t.Errorf("expected no broken links (all unsupported), got: %+v", report.Pages[0].BrokenLinks)
 	}
 }
+
+func TestAnalyze_SEO_Metrics(t *testing.T) {
+	tests := []struct {
+		name           string
+		html           string
+		wantHasTitle   bool
+		wantTitle      string
+		wantHasDesc    bool
+		wantDesc       string
+		wantHasH1      bool
+	}{
+		{
+			name: "all SEO tags present",
+			html: `
+				<html>
+				<head>
+					<title>My &amp; Awesome Site</title>
+					<meta name="description" content="Welcome to our &lt;site&gt;">
+				</head>
+				<body>
+					<h1>Main Heading</h1>
+				</body>
+				</html>`,
+			wantHasTitle:  true,
+			wantTitle:     "My & Awesome Site", // &amp; → &
+			wantHasDesc:   true,
+			wantDesc:      "Welcome to our <site>", // &lt; → <
+			wantHasH1:     true,
+		},
+		{
+			name: "no SEO tags",
+			html: `<html><body><p>Just content</p></body></html>`,
+			wantHasTitle:  false,
+			wantTitle:     "",
+			wantHasDesc:   false,
+			wantDesc:      "",
+			wantHasH1:     false,
+		},
+		{
+			name: "empty title and description",
+			html: `
+				<html>
+				<head>
+					<title>   </title>
+					<meta name="description" content="">
+				</head>
+				<body><h1>   </h1></body>
+				</html>`,
+			wantHasTitle:  false, // пустой после trim
+			wantTitle:     "",
+			wantHasDesc:   false, // пустой content
+			wantDesc:      "",
+			wantHasH1:     false, // пустой после trim
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				w.Header().Set("Content-Type", "text/html")
+				_, _ = w.Write([]byte(tt.html))
+			})
+
+			server := httptest.NewServer(handler)
+			t.Cleanup(server.Close)
+
+			ctx := context.Background()
+			opts := DefaultOptions()
+			opts.URL = server.URL
+			opts.Depth = 1
+			opts.IndentJSON = true
+
+			result, err := Analyze(ctx, opts)
+			if err != nil {
+				t.Fatalf("Analyze() error = %v", err)
+			}
+
+			var report Report
+			if err := json.Unmarshal(result, &report); err != nil {
+				t.Fatalf("unmarshal error: %v", err)
+			}
+
+			if len(report.Pages) != 1 {
+				t.Fatalf("expected 1 page, got %d", len(report.Pages))
+			}
+
+			page := report.Pages[0]
+			if page.SEO == nil {
+				if tt.wantHasTitle || tt.wantHasDesc || tt.wantHasH1 {
+					t.Error("expected non-nil SEO, got nil")
+				}
+				return
+			}
+
+			seo := page.SEO
+			if seo.HasTitle != tt.wantHasTitle {
+				t.Errorf("HasTitle = %v, want %v", seo.HasTitle, tt.wantHasTitle)
+			}
+			if seo.Title != tt.wantTitle {
+				t.Errorf("Title = %q, want %q", seo.Title, tt.wantTitle)
+			}
+			if seo.HasDescription != tt.wantHasDesc {
+				t.Errorf("HasDescription = %v, want %v", seo.HasDescription, tt.wantHasDesc)
+			}
+			if seo.Description != tt.wantDesc {
+				t.Errorf("Description = %q, want %q", seo.Description, tt.wantDesc)
+			}
+			if seo.HasH1 != tt.wantHasH1 {
+				t.Errorf("HasH1 = %v, want %v", seo.HasH1, tt.wantHasH1)
+			}
+		})
+	}
+}
