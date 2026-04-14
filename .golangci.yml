@@ -1,0 +1,109 @@
+# Обязательно для golangci-lint v2
+version: "2"
+
+# Настройки запуска
+run:
+  timeout: 5m
+  # Пути относительно go.mod для консистентности в CI/локально
+  relative-path-mode: gomod
+  # Включаем тесты в анализ
+  tests: true
+
+# Линтеры
+linters:
+  # Базовый набор: стандартные + быстрые линтеры
+  default: standard
+  
+  # Дополнительные линтеры для нашего проекта
+  enable:
+    - errcheck          # необработанные ошибки — критично для сетевого кода
+    - govet             # стандартные подозрительные конструкции
+    - staticcheck       # расширенная статическая проверка
+    - unused            # неиспользуемый код
+    - ineffassign       # неэффективные присваивания
+    - goconst           # повторяющиеся литералы → константы
+    - gocyclo           # цикломатическая сложность
+    - gosec             # безопасность (SQLi, path traversal и т.д.)
+    - noctx             # контекст в HTTP-запросах
+    - bodyclose         # закрытие тела ответа
+    - whitespace        # лишние пробелы/переносы
+  
+  # Настройки конкретных линтеров
+  settings:
+    # errcheck: не игнорируем ошибки по умолчанию
+    errcheck:
+      check-type-assertions: false
+      check-blank: false
+      # Исключения только для явно безопасных случаев
+      exclude-functions:
+        - fmt.Fprintln
+        - fmt.Fprintf
+    
+    # govet: включаем дополнительные проверки
+    govet:
+      enable:
+        - shadow
+        - nilness
+    
+    # gosec: минимальный порог, чтобы не спамить в начале проекта
+    gosec:
+      severity: medium
+      confidence: medium
+    
+    # gocyclo: порог сложности — можно снижать по мере рефакторинга
+    gocyclo:
+      min-complexity: 15
+    
+    # goconst: находим дубликаты строк от 3 символов, встречающиеся 3+ раза
+    goconst:
+      min-len: 3
+      min-occurrences: 3
+
+  # Исключения — точечно, только где действительно нужно
+  exclusions:
+    # Включаем пресеты для стандартных ложных срабатываний
+    presets:
+      - common-false-positives
+      - std-error-handling
+    
+    # Правила для конкретных файлов/паттернов
+    rules:
+      # В тестах можно игнорировать некоторые проверки
+      - path: _test\.go
+        linters:
+          - gocyclo
+          - gosec
+          - errcheck  # в тестах иногда допустимо игнорировать Close/Write
+      
+      # В main.go допустимы необработанные ошибки CLI-хелперов
+      - path: cmd/.+
+        text: "Error return value of `cli\\.ShowAppHelp`"
+        linters:
+          - errcheck
+      
+      # defer resp.Body.Close() — ошибка закрытия часто не критична
+      - path: .+\.go
+        text: "Error return value of `.+.Close`"
+        linters:
+          - errcheck
+
+# Формат вывода
+output:
+  formats:
+    text:
+      colors: true
+      print-linter-name: true
+      print-issued-lines: true
+  # Сортировка: сначала по файлу, потом по строке
+  sort-order:
+    - file
+    - linter
+
+# Severity (опционально, для интеграции с CI)
+severity:
+  default: warning
+  rules:
+    - linters:
+        - gosec
+        - staticcheck
+      severity: error
