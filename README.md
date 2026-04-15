@@ -125,6 +125,38 @@ make run URL=https://example.com DELAY=1s
 make run URL=https://example.com RETRIES=2 DELAY=500ms
 ```
 
+## Ассеты (изображения, скрипты, стили)
+
+Краулер автоматически анализирует внешние ресурсы страницы:
+- `<img src="...">` → тип `image`
+- `<script src="...">` → тип `script`
+- `<link rel="stylesheet" href="...">` → тип `style`
+
+Для каждого ассета в отчёте указывается:
+| Поле | Описание |
+|------|----------|
+| `url` | Абсолютный URL ресурса |
+| `type` | Тип: `image`, `script`, `style`, `other` |
+| `status_code` | HTTP-статус ответа |
+| `size_bytes` | Размер в байтах (из `Content-Length` или фактического тела) |
+| `error` | Сообщение об ошибке (если статус ≥400 или сетевой сбой) |
+
+**Кэширование:** один и тот же ассет, встреченный на разных страницах, проверяется только один раз. Результаты переиспользуются, лишние запросы к серверу не выполняются.
+
+```bash
+# Пример вывода
+make run URL=https://example.com | jq '.pages[0].assets'
+[
+  {
+    "url": "https://example.com/static/logo.png",
+    "type": "image",
+    "status_code": 200,
+    "size_bytes": 12345,
+    "error": ""
+  }
+]
+```
+
 ## Архитектура
 
 * cmd/hexlet-go-crawler/ — CLI-интерфейс

@@ -31,6 +31,7 @@ type crawlEngine struct {
 	results   []PageReport
 	resultMu  sync.Mutex
 	limiter   *rate.Limiter
+	assetCache  *assetCache
 }
 
 // Analyze — точка входа в краулер.
@@ -59,6 +60,7 @@ func Analyze(ctx context.Context, opts Options) ([]byte, error) {
 		visited:   make(map[string]bool),
 		queue:     make(chan crawlTask, 100),
 		limiter:   createLimiter(opts),
+		assetCache: newAssetCache(),
 	}
 
 	results, err := engine.run(ctx)
@@ -138,7 +140,7 @@ func (e *crawlEngine) worker(ctx context.Context, taskWg *sync.WaitGroup, worker
 			continue
 		}
 
-		page, links := crawlPage(ctx, e.client, e.limiter, task.url, task.depth, e.opts)
+		page, links := crawlPage(ctx, e.client, e.limiter, e.assetCache, task.url, task.depth, e.opts)
 
 		e.resultMu.Lock()
 		e.results = append(e.results, page)
@@ -201,7 +203,7 @@ func formatReport(rootURL string, depth int, results []PageReport, indentJSON bo
 	return json.MarshalIndent(report, "", indent)
 }
 
-func crawlPage(ctx context.Context, client *http.Client, limiter *rate.Limiter, url string, depth int, opts Options) (PageReport, []string) {
+func crawlPage(ctx context.Context, client *http.Client, limiter *rate.Limiter, assetCache *assetCache, url string, depth int, opts Options) (PageReport, []string) {
 	report := PageReport{URL: url, Depth: depth}
 	if ctx.Err() != nil {
 		report.Status = "skipped"
@@ -220,7 +222,7 @@ func crawlPage(ctx context.Context, client *http.Client, limiter *rate.Limiter, 
 	report.HTTPStatus = resp.StatusCode
 	report.Status = "ok"
 
-	links := analyzePageContent(ctx, client, limiter, resp.Body, opts.URL, &report, opts)
+	links := analyzePageContent(ctx, client, limiter, assetCache, resp.Body, opts.URL, &report, opts)
 	report.DiscoveredAt = time.Now().UTC()
 	return report, links
 }
@@ -322,6 +324,7 @@ func analyzePageContent(
 	ctx context.Context,
 	client *http.Client,
 	limiter *rate.Limiter,
+	assetCache *assetCache,
 	body io.Reader,
 	baseURL string,
 	report *PageReport,
@@ -332,17 +335,30 @@ func analyzePageContent(
 		return nil
 	}
 
+	// SEO (без изменений)
 	seo := extractSEO(doc)
 	if seo.HasTitle || seo.HasDescription || seo.HasH1 {
 		report.SEO = seo
 	}
 
-	links := extractLinks(baseURL, doc)
-	for _, link := range links {
+	// Ассеты
+	assets := extractAssets(baseURL, doc)
+	for _, a := range assets {
 		if ctx.Err() != nil {
 			break
 		}
-		// Передаём лимитер в checkLink
+	
+		// Атомарная операция: загрузить или взять из кэша
+		asset := assetCache.getOrCreate(a.url, func() *Asset {
+			return checkAsset(ctx, client, limiter, a.url, a.tag, a.attrs)
+		})
+		report.Assets = append(report.Assets, *asset)
+	}
+
+	// Битые ссылки (без изменений)
+	links := extractLinks(baseURL, doc)
+	for _, link := range links {
+		if ctx.Err() != nil { break }
 		if broken := checkLink(ctx, client, limiter, link); broken != nil {
 			report.BrokenLinks = append(report.BrokenLinks, *broken)
 		}

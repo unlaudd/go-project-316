@@ -28,6 +28,16 @@ type PageReport struct {
 	BrokenLinks   []BrokenLink  `json:"broken_links,omitempty"`
 	DiscoveredAt  time.Time     `json:"discovered_at,omitempty"`
 	SEO           *SEO         `json:"seo,omitempty"`
+	Assets        []Asset      `json:"assets,omitempty"`
+}
+
+// Asset описывает внешний ресурс страницы (изображение, скрипт, стиль)
+type Asset struct {
+	URL        string `json:"url"`
+	Type       string `json:"type"`          // "image", "script", "style", "other"
+	StatusCode int    `json:"status_code"`   // HTTP-статус или 0 при сетевой ошибке
+	SizeBytes  int64  `json:"size_bytes"`    // Размер в байтах (0 если не определён)
+	Error      string `json:"error,omitempty"`
 }
 
 // Report — итоговый JSON-отчёт

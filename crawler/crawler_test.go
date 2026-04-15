@@ -711,3 +711,138 @@ func TestAnalyze_Retries_ContextCancel(t *testing.T) {
 		t.Errorf("too many requests (%d) despite short context timeout", reqCount)
 	}
 }
+
+func TestAnalyze_Assets_Deduplication(t *testing.T) {
+	var reqMu sync.Mutex
+	reqCount := make(map[string]int) // считаем запросы по путям
+
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		reqMu.Lock()
+		reqCount[r.URL.Path]++
+		reqMu.Unlock()
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `<img src="/asset.png"><a href="/page2">next</a>`)
+	})
+
+	mux.HandleFunc("/page2", func(w http.ResponseWriter, r *http.Request) {
+		reqMu.Lock()
+		reqCount[r.URL.Path]++
+		reqMu.Unlock()
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `<img src="/asset.png">`)
+	})
+
+	mux.HandleFunc("/asset.png", func(w http.ResponseWriter, r *http.Request) {
+		reqMu.Lock()
+		reqCount[r.URL.Path]++
+		reqMu.Unlock()
+		w.Header().Set("Content-Length", "1234")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("fake image data"))
+	})
+
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	ctx := context.Background()
+	opts := DefaultOptions()
+	opts.URL = server.URL
+	opts.Depth = 2
+	opts.Concurrency = 1
+
+	_, err := Analyze(ctx, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reqMu.Lock()
+	assetReqs := reqCount["/asset.png"]
+	reqMu.Unlock()
+
+	// Проверяем именно запросы к ассету, как требует ТЗ
+	// (checkLink добавляет запросы к / и /page2, но /asset.png должен быть ровно 1)
+	if assetReqs != 1 {
+		t.Errorf("expected 1 request to /asset.png (deduplicated), got %d", assetReqs)
+	}
+}
+
+func TestAnalyze_Assets_MissingContentLength(t *testing.T) {
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `<script src="/asset.js"></script>`)
+	})
+
+	mux.HandleFunc("/asset.js", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(strings.Repeat("x", 500)))
+	})
+
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	ctx := context.Background()
+	opts := DefaultOptions()
+	opts.URL = server.URL
+	opts.Depth = 1
+
+	result, err := Analyze(ctx, opts)
+	if err != nil { t.Fatal(err) }
+
+	var report Report
+	if err := json.Unmarshal(result, &report); err != nil { t.Fatal(err) }
+
+	if len(report.Pages[0].Assets) != 1 {
+		t.Fatalf("expected 1 asset, got %d", len(report.Pages[0].Assets))
+	}
+
+	asset := report.Pages[0].Assets[0]
+	if asset.SizeBytes != 500 {
+		t.Errorf("expected size 500, got %d", asset.SizeBytes)
+	}
+	if asset.Error != "" {
+		t.Errorf("expected no error, got %q", asset.Error)
+	}
+}
+
+func TestAnalyze_Assets_ErrorResponse(t *testing.T) {
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `<link rel="stylesheet" href="/missing.css">`)
+	})
+
+	mux.HandleFunc("/missing.css", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	ctx := context.Background()
+	opts := DefaultOptions()
+	opts.URL = server.URL
+	opts.Depth = 1
+
+	result, err := Analyze(ctx, opts)
+	if err != nil { t.Fatal(err) }
+
+	var report Report
+	if err := json.Unmarshal(result, &report); err != nil { t.Fatal(err) }
+
+	if len(report.Pages[0].Assets) != 1 {
+		t.Fatalf("expected 1 asset, got %d", len(report.Pages[0].Assets))
+	}
+
+	asset := report.Pages[0].Assets[0]
+	if asset.StatusCode != http.StatusNotFound {
+		t.Errorf("expected status 404, got %d", asset.StatusCode)
+	}
+	if asset.Error == "" || !strings.Contains(asset.Error, "Not Found") {
+		t.Errorf("expected error with 'Not Found', got %q", asset.Error)
+	}
+}
