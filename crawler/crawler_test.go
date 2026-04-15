@@ -613,3 +613,101 @@ func TestAnalyze_RateLimiting(t *testing.T) {
 		t.Errorf("too few requests executed: %d", count)
 	}
 }
+
+func TestAnalyze_Retries_SuccessAfterFailures(t *testing.T) {
+	var reqCount int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		reqCount++
+		if reqCount <= 2 {
+			w.WriteHeader(http.StatusServiceUnavailable) // 503
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "OK")
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	ctx := context.Background()
+	opts := DefaultOptions()
+	opts.URL = server.URL
+	opts.Retries = 2
+	opts.Delay = 10 * time.Millisecond // ускоряем тест
+
+	result, err := Analyze(ctx, opts)
+	if err != nil { t.Fatal(err) }
+
+	var report Report
+	if err := json.Unmarshal(result, &report); err != nil { t.Fatal(err) }
+
+	if report.Pages[0].HTTPStatus != http.StatusOK {
+		t.Errorf("expected 200 after retries, got %d", report.Pages[0].HTTPStatus)
+	}
+	if report.Pages[0].Status != "ok" {
+		t.Errorf("expected status ok, got %q", report.Pages[0].Status)
+	}
+	if reqCount != 3 { // 1 начальный + 2 retries
+		t.Errorf("expected 3 requests, got %d", reqCount)
+	}
+}
+
+func TestAnalyze_Retries_Exhausted(t *testing.T) {
+	var reqCount int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		reqCount++
+		w.WriteHeader(http.StatusTooManyRequests) // 429 всегда
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	ctx := context.Background()
+	opts := DefaultOptions()
+	opts.URL = server.URL
+	opts.Retries = 2
+	opts.Delay = 10 * time.Millisecond
+
+	result, err := Analyze(ctx, opts)
+	if err != nil { t.Fatal(err) }
+
+	var report Report
+	if err := json.Unmarshal(result, &report); err != nil { t.Fatal(err) }
+
+	if report.Pages[0].Status != "error" {
+		t.Errorf("expected status error after exhausted retries, got %q", report.Pages[0].Status)
+	}
+	if !strings.Contains(report.Pages[0].Error, "429") {
+		t.Errorf("error should mention status 429, got: %s", report.Pages[0].Error)
+	}
+	if reqCount != 3 { // не более retries + 1
+		t.Errorf("expected exactly 3 requests, got %d", reqCount)
+	}
+}
+
+func TestAnalyze_Retries_ContextCancel(t *testing.T) {
+	var reqCount int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		reqCount++
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	// Контекст умрёт быстрее, чем закончатся повторы
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+
+	opts := DefaultOptions()
+	opts.URL = server.URL
+	opts.Retries = 5
+	opts.Delay = 200 * time.Millisecond // задержка > timeout
+
+	_, _ = Analyze(ctx, opts) // не должен паниковать
+
+	// Должен выполниться только 1 запрос, т.к. после него начнётся wait, который прервётся
+	if reqCount > 2 {
+		t.Errorf("too many requests (%d) despite short context timeout", reqCount)
+	}
+}

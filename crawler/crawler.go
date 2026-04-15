@@ -225,10 +225,45 @@ func crawlPage(ctx context.Context, client *http.Client, limiter *rate.Limiter, 
 	return report, links
 }
 
+// fetchWithRetries выполняет запрос с повторами при временных ошибках
 func fetchWithRetries(ctx context.Context, client *http.Client, url string, opts Options) (*http.Response, error) {
+	retryDelay := opts.Delay
+	if retryDelay == 0 {
+		retryDelay = 200 * time.Millisecond
+	}
+
+	for attempt := 0; attempt <= opts.Retries; attempt++ {
+		resp, err := doRequest(ctx, client, url, opts)
+
+		// Если ответ окончательный (успех или постоянная ошибка) — принимаем его
+		if shouldAcceptResponse(err, resp) {
+			return resp, err
+		}
+
+		// Последняя попытка: обрабатываем исчерпание повторов
+		if attempt == opts.Retries {
+			return handleFinalAttempt(resp, err, opts)
+		}
+
+		// Готовимся к следующей попытке
+		closeResponseBody(resp)
+
+		if waitErr := waitForRetry(ctx, retryDelay, attempt); waitErr != nil {
+			return nil, waitErr
+		}
+	}
+	return nil, fmt.Errorf("unexpected end of retry loop")
+}
+
+// doRequest создаёт и выполняет единичный HTTP-запрос
+func doRequest(ctx context.Context, client *http.Client, url string, opts Options) (*http.Response, error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	ua := opts.UserAgent
@@ -237,23 +272,50 @@ func fetchWithRetries(ctx context.Context, client *http.Client, url string, opts
 	}
 	req.Header.Set("User-Agent", ua)
 
-	var resp *http.Response
-	var lastErr error
+	return client.Do(req)
+}
 
-	for attempt := 0; attempt <= opts.Retries; attempt++ {
-		resp, lastErr = client.Do(req)
-		if lastErr == nil {
-			return resp, nil
-		}
-		if attempt < opts.Retries {
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(opts.Delay):
-			}
-		}
+// shouldAcceptResponse возвращает true, если ответ не требует повтора
+func shouldAcceptResponse(err error, resp *http.Response) bool {
+	if err != nil {
+		return false // сетевая ошибка → нужно повторить
 	}
-	return nil, lastErr
+	// 2xx, 3xx, 4xx (кроме 429) → окончательный результат
+	// 429, 5xx → временная ошибка → нужно повторить
+	return !isTemporaryStatus(resp.StatusCode)
+}
+
+// handleFinalAttempt обрабатывает ситуацию, когда повторы исчерпаны
+func handleFinalAttempt(resp *http.Response, err error, opts Options) (*http.Response, error) {
+	if resp != nil {
+		// Если были настроены повторы и статус временный → ошибка
+		if opts.Retries > 0 && isTemporaryStatus(resp.StatusCode) {
+			_ = resp.Body.Close()
+			return nil, fmt.Errorf("temporary status %d after %d retries", resp.StatusCode, opts.Retries)
+		}
+		// Иначе (нет повторов или постоянный статус) → возвращаем ответ
+		return resp, nil
+	}
+	// Сетевая ошибка без ответа
+	return nil, err
+}
+
+// closeResponseBody безопасно закрывает тело ответа
+func closeResponseBody(resp *http.Response) {
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+}
+
+// waitForRetry ожидает перед следующей попыткой с линейным backoff
+func waitForRetry(ctx context.Context, baseDelay time.Duration, attempt int) error {
+	delay := baseDelay * time.Duration(attempt+1)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(delay):
+		return nil
+	}
 }
 
 func analyzePageContent(
@@ -286,4 +348,9 @@ func analyzePageContent(
 		}
 	}
 	return links
+}
+
+// isTemporaryStatus возвращает true для кодов, указывающих на временную недоступность
+func isTemporaryStatus(code int) bool {
+	return code == http.StatusTooManyRequests || (code >= 500 && code < 600)
 }
