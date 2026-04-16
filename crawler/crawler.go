@@ -441,3 +441,24 @@ func analyzePageContent(
 func isTemporaryStatus(code int) bool {
 	return code == http.StatusTooManyRequests || (code >= 500 && code < 600)
 }
+
+// canonURL нормализует URL для сравнения (удаляет фрагмент, приводит путь)
+func canonURL(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	cp := *u
+	cp.Fragment = ""
+	if cp.Path == "" {
+		cp.Path = "/"
+	}
+	return cp.String()
+}
+
+// isSamePage проверяет, ведут ли два URL на одну и ту же страницу
+func isSamePage(a, b *url.URL) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	return canonURL(a) == canonURL(b)
+}
