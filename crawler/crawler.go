@@ -388,7 +388,6 @@ func analyzePageContent(
 	}
 
 	// Дедупликация битых ссылок по нормализованному URL
-	seenBroken := make(map[string]struct{})
 	
 	links := extractLinks(baseURL, doc)
 	for _, link := range links {
@@ -396,11 +395,7 @@ func analyzePageContent(
 			break
 		}
 		if broken := checkLink(ctx, client, limiter, link); broken != nil {
-			// Ключ = link (уже нормализован в extractLinks)
-			if _, exists := seenBroken[link]; !exists {
-				seenBroken[link] = struct{}{}
-				report.BrokenLinks = append(report.BrokenLinks, *broken)
-			}
+			report.BrokenLinks = append(report.BrokenLinks, *broken)
 		}
 	}
 	return links
