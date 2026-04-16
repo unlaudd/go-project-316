@@ -391,41 +391,23 @@ func analyzePageContent(
 	// Определяем хост стартовой страницы для фильтрации внешних ссылок
 	startHost, _ := url.Parse(baseURL)
 
+	// В analyzePageContent — минимальная версия:
 	links := extractLinks(baseURL, doc)
-	
-	// Инициализируем срез явно, чтобы JSON всегда содержал [], а не null
-	report.BrokenLinks = []BrokenLink{}
-	
+	report.BrokenLinks = []BrokenLink{} // чтобы в JSON было [], а не null
+
 	seenBroken := make(map[string]struct{})
-
 	for _, link := range links {
-		if ctx.Err() != nil {
-			break
-		}
-
-		// Фильтр внешних доменов (стандартное требование курса)
-		if startHost != nil {
-			if parsed, err := url.Parse(link); err == nil && parsed.Hostname() != startHost.Hostname() {
-				continue
-			}
-		}
-
-		// Дедупликация по полному URL
-		if _, exists := seenBroken[link]; exists {
-			continue
-		}
-		seenBroken[link] = struct{}{}
-
-		if broken := checkLink(ctx, client, limiter, link); broken != nil {
-			report.BrokenLinks = append(report.BrokenLinks, *broken)
-		}
+    	if ctx.Err() != nil { break }
+    	if broken := checkLink(ctx, client, limiter, link); broken != nil {
+        	if _, exists := seenBroken[link]; !exists {
+            	seenBroken[link] = struct{}{}
+            	report.BrokenLinks = append(report.BrokenLinks, *broken)
+        	}
+    	}
 	}
-
-	// Сортировка битых ссылок по URL (критично для побайтового сравнения в CI)
 	sort.Slice(report.BrokenLinks, func(i, j int) bool {
-		return report.BrokenLinks[i].URL < report.BrokenLinks[j].URL
+    	return report.BrokenLinks[i].URL < report.BrokenLinks[j].URL
 	})
-
 	return links
 }
 
