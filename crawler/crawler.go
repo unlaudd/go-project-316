@@ -393,7 +393,10 @@ func analyzePageContent(
 
 	links := extractLinks(baseURL, doc)
 	
-	// Простая дедупликация: extractLinks уже вернул нормализованные URL
+	// Инициализируем срез явно, чтобы JSON всегда содержал [], а не null
+	report.BrokenLinks = []BrokenLink{}
+	
+	startHost, _ := url.Parse(baseURL)
 	seenBroken := make(map[string]struct{})
 
 	for _, link := range links {
@@ -401,16 +404,14 @@ func analyzePageContent(
 			break
 		}
 
-		// ← Пропускаем ссылки на другие домены
+		// Фильтр внешних доменов (стандартное требование курса)
 		if startHost != nil {
-			if parsed, err := url.Parse(link); err == nil {
-				if parsed.Hostname() != startHost.Hostname() {
-					continue
-				}
+			if parsed, err := url.Parse(link); err == nil && parsed.Hostname() != startHost.Hostname() {
+				continue
 			}
 		}
 
-		// Дедупликация по ссылке как есть (она уже нормализована в extractLinks)
+		// Дедупликация по полному URL
 		if _, exists := seenBroken[link]; exists {
 			continue
 		}
@@ -420,6 +421,12 @@ func analyzePageContent(
 			report.BrokenLinks = append(report.BrokenLinks, *broken)
 		}
 	}
+
+	// Сортировка битых ссылок по URL (критично для побайтового сравнения в CI)
+	sort.Slice(report.BrokenLinks, func(i, j int) bool {
+		return report.BrokenLinks[i].URL < report.BrokenLinks[j].URL
+	})
+
 	return links
 }
 
