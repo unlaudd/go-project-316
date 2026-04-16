@@ -218,13 +218,12 @@ func formatReport(rootURL string, depth int, results []PageReport, indentJSON bo
 
 // crawlPage fetches a single page and extracts its content, links, SEO data, and assets.
 func crawlPage(ctx context.Context, client *http.Client, limiter *rate.Limiter, assetCache *assetCache, url string, depth int, opts Options) (PageReport, []string) {
+	// SEO всегда инициализируем как объект, остальные поля - нулевые значения
 	report := PageReport{
 		URL:   url,
 		Depth: depth,
-		Status:      "ok",
-		BrokenLinks: []BrokenLink{},
-		Assets:      []Asset{}, 
-		SEO:   &SEO{},
+		SEO:   &SEO{}, // ← важно: объект {}, а не nil
+		// BrokenLinks и Assets намеренно не инициализируем → будут null в JSON
 	}
 	
 	if ctx.Err() != nil {
@@ -237,6 +236,7 @@ func crawlPage(ctx context.Context, client *http.Client, limiter *rate.Limiter, 
 	if err != nil {
 		report.Status = "error"
 		report.Error = err.Error()
+		// Возвращаем с nil-полями BrokenLinks/Assets → в JSON будет null
 		return report, nil
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -244,11 +244,13 @@ func crawlPage(ctx context.Context, client *http.Client, limiter *rate.Limiter, 
 	report.HTTPStatus = resp.StatusCode
 	report.Status = "ok"
 	
+	// ← ТОЛЬКО для успешных страниц инициализируем срезы → в JSON будет []
 	report.BrokenLinks = []BrokenLink{}
 	report.Assets = []Asset{}
 
-	links := analyzePageContent(ctx, client, limiter, assetCache, resp.Body, opts.URL, &report, opts)
+	links := analyzePageContent(ctx, client, limiter, assetCache, resp.Body, url, &report, opts)
 
+	// Сортировка ассетов для стабильного вывода
 	sort.Slice(report.Assets, func(i, j int) bool {
 		if report.Assets[i].Type != report.Assets[j].Type {
 			return report.Assets[i].Type < report.Assets[j].Type
@@ -389,7 +391,6 @@ func analyzePageContent(
 			break
 		}
 		if broken := checkLink(ctx, client, limiter, link); broken != nil {
-			// Добавляем только если эта битая ссылка ещё не встречалась
 			if _, exists := seenBroken[broken.URL]; !exists {
 				seenBroken[broken.URL] = struct{}{}
 				report.BrokenLinks = append(report.BrokenLinks, *broken)
