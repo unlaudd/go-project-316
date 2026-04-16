@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"os"
 
 	"golang.org/x/net/html"
 	"golang.org/x/time/rate"
@@ -219,12 +218,12 @@ func formatReport(rootURL string, depth int, results []PageReport, indentJSON bo
 
 // crawlPage fetches a single page and extracts its content, links, SEO data, and assets.
 func crawlPage(ctx context.Context, client *http.Client, limiter *rate.Limiter, assetCache *assetCache, url string, depth int, opts Options) (PageReport, []string) {
-	// SEO всегда инициализируем как объект, остальные поля - нулевые значения
+	// SEO всегда объект, остальное — нулевые значения (null в JSON при ошибке)
 	report := PageReport{
 		URL:   url,
 		Depth: depth,
-		SEO:   &SEO{}, // ← важно: объект {}, а не nil
-		// BrokenLinks и Assets намеренно не инициализируем → будут null в JSON
+		SEO:   &SEO{}, 
+		// BrokenLinks и Assets = nil → будут null в JSON при ошибке
 	}
 	
 	if ctx.Err() != nil {
@@ -237,15 +236,14 @@ func crawlPage(ctx context.Context, client *http.Client, limiter *rate.Limiter, 
 	if err != nil {
 		report.Status = "error"
 		report.Error = err.Error()
-		// Возвращаем с nil-полями BrokenLinks/Assets → в JSON будет null
-		return report, nil
+		return report, nil // ← nil-поля → null в JSON
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	report.HTTPStatus = resp.StatusCode
 	report.Status = "ok"
 	
-	// ← ТОЛЬКО для успешных страниц инициализируем срезы → в JSON будет []
+	// ← ТОЛЬКО для успешных страниц инициализируем срезы → [] в JSON
 	report.BrokenLinks = []BrokenLink{}
 	report.Assets = []Asset{}
 
@@ -384,6 +382,7 @@ func analyzePageContent(
 		report.Assets = append(report.Assets, *asset)
 	}
 
+	// Дедупликация битых ссылок по нормализованному URL
 	seenBroken := make(map[string]struct{})
 	
 	links := extractLinks(baseURL, doc)
@@ -391,26 +390,16 @@ func analyzePageContent(
 		if ctx.Err() != nil {
 			break
 		}
+		
 		if broken := checkLink(ctx, client, limiter, link); broken != nil {
-			// Нормализуем URL так же, как в extractLinks
-			parsed, err := url.Parse(broken.URL)
-			if err == nil {
-				parsed.Fragment = ""
-				parsed.Path = strings.TrimSuffix(parsed.Path, "/")
-				if parsed.Path == "" {
-					parsed.Path = "/"
-				}
-			}
-			normURL := parsed.String()
-			
-			if _, exists := seenBroken[normURL]; !exists {
-				seenBroken[normURL] = struct{}{}
+			// Нормализуем URL для надёжной дедупликации
+			normalURL := normalizeURLForCache(link)
+			if _, exists := seenBroken[normalURL]; !exists {
+				seenBroken[normalURL] = struct{}{}
 				report.BrokenLinks = append(report.BrokenLinks, *broken)
 			}
 		}
 	}
-	fmt.Fprintf(os.Stderr, "DEBUG: Found %d broken links: %+v\n", 
-    len(report.BrokenLinks), report.BrokenLinks)
 	return links
 }
 
