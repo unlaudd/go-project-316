@@ -388,39 +388,36 @@ func analyzePageContent(
 	}
 
 	// Дедупликация битых ссылок по нормализованному URL
-	
+	// Определяем хост стартовой страницы для фильтрации внешних ссылок
+	startHost, _ := url.Parse(baseURL)
+
 	links := extractLinks(baseURL, doc)
 	
-	// Дедупликация битых ссылок на уровне host+path
-	// защищает от дубликатов вида http://site/page и https://site/page
+	// Простая дедупликация: extractLinks уже вернул нормализованные URL
 	seenBroken := make(map[string]struct{})
-	
+
 	for _, link := range links {
 		if ctx.Err() != nil {
 			break
 		}
-		if broken := checkLink(ctx, client, limiter, link); broken != nil {
-			// Нормализуем ключ: убираем схему, порт по умолчанию, фрагмент, слэш
-			if u, err := url.Parse(broken.URL); err == nil {
-				u.Scheme = ""
-				if u.Port() == "80" || u.Port() == "443" {
-					u.Host = u.Hostname()
+
+		// ← Пропускаем ссылки на другие домены
+		if startHost != nil {
+			if parsed, err := url.Parse(link); err == nil {
+				if parsed.Hostname() != startHost.Hostname() {
+					continue
 				}
-				u.Fragment = ""
-				u.Path = strings.TrimSuffix(u.Path, "/")
-				if u.Path == "" {
-					u.Path = "/"
-				}
-				key := u.String()
-				
-				if _, exists := seenBroken[key]; !exists {
-					seenBroken[key] = struct{}{}
-					report.BrokenLinks = append(report.BrokenLinks, *broken)
-				}
-			} else {
-				// Если URL не парсится, используем как есть
-				report.BrokenLinks = append(report.BrokenLinks, *broken)
 			}
+		}
+
+		// Дедупликация по ссылке как есть (она уже нормализована в extractLinks)
+		if _, exists := seenBroken[link]; exists {
+			continue
+		}
+		seenBroken[link] = struct{}{}
+
+		if broken := checkLink(ctx, client, limiter, link); broken != nil {
+			report.BrokenLinks = append(report.BrokenLinks, *broken)
 		}
 	}
 	return links
