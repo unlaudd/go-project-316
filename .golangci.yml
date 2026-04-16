@@ -1,108 +1,112 @@
-# Обязательно для golangci-lint v2
+# golangci-lint configuration for hexlet-go-crawler.
+# Compatible with golangci-lint v2.
 version: "2"
 
-# Настройки запуска
+# Runner settings.
 run:
+  # Maximum time allowed for a single linter run.
   timeout: 5m
-  # Пути относительно go.mod для консистентности в CI/локально
+  # Resolve file paths relative to go.mod for consistent CI/local behavior.
   relative-path-mode: gomod
-  # Включаем тесты в анализ
+  # Include test files in analysis.
   tests: true
 
-# Линтеры
+# Linter configuration.
 linters:
-  # Базовый набор: стандартные + быстрые линтеры
+  # Start with the standard preset (fast, reliable linters).
   default: standard
   
-  # Дополнительные линтеры для нашего проекта
+  # Project-specific linters for additional coverage.
   enable:
-    - errcheck          # необработанные ошибки — критично для сетевого кода
-    - govet             # стандартные подозрительные конструкции
-    - staticcheck       # расширенная статическая проверка
-    - unused            # неиспользуемый код
-    - ineffassign       # неэффективные присваивания
-    - goconst           # повторяющиеся литералы → константы
-    - gocyclo           # цикломатическая сложность
-    - gosec             # безопасность (SQLi, path traversal и т.д.)
-    - noctx             # контекст в HTTP-запросах
-    - bodyclose         # закрытие тела ответа
-    - whitespace        # лишние пробелы/переносы
+    - errcheck          # Detect unchecked errors (critical for network code).
+    - govet             # Flag suspicious Go constructs.
+    - staticcheck       # Advanced static analysis beyond the compiler.
+    - unused            # Identify unused code, variables, or parameters.
+    - ineffassign       # Detect ineffective assignments.
+    - goconst           # Suggest constants for repeated string literals.
+    - gocyclo           # Enforce cyclomatic complexity limits.
+    - gosec             # Security-focused checks (SQLi, path traversal, etc.).
+    - noctx             # Ensure context is passed to HTTP requests.
+    - bodyclose         # Ensure HTTP response bodies are closed.
+    - whitespace        # Detect unnecessary whitespace.
   
-  # Настройки конкретных линтеров
+  # Per-linter settings.
   settings:
-    # errcheck: не игнорируем ошибки по умолчанию
     errcheck:
+      # Do not ignore type assertions or blank assignments by default.
       check-type-assertions: false
       check-blank: false
-      # Исключения только для явно безопасных случаев
+      # Allow ignoring errors for explicitly safe operations.
       exclude-functions:
         - fmt.Fprintln
         - fmt.Fprintf
     
-    # govet: включаем дополнительные проверки
     govet:
+      # Enable additional govet analyzers.
       enable:
-        - shadow
-        - nilness
+        - shadow   # Detect variable shadowing.
+        - nilness  # Detect potential nil pointer dereferences.
     
-    # gosec: минимальный порог, чтобы не спамить в начале проекта
     gosec:
+      # Minimum severity and confidence to report issues.
       severity: medium
       confidence: medium
     
-    # gocyclo: порог сложности — можно снижать по мере рефакторинга
     gocyclo:
+      # Maximum allowed cyclomatic complexity per function.
       min-complexity: 15
     
-    # goconst: находим дубликаты строк от 3 символов, встречающиеся 3+ раза
     goconst:
+      # Minimum length and occurrence count for string literal suggestions.
       min-len: 3
       min-occurrences: 3
 
-  # Исключения — точечно, только где действительно нужно
+  # Exclusion rules for known false positives or acceptable patterns.
   exclusions:
-    # Включаем пресеты для стандартных ложных срабатываний
+    # Enable preset exclusion groups for common false positives.
     presets:
       - common-false-positives
       - std-error-handling
     
-    # Правила для конкретных файлов/паттернов
+    # Custom exclusion rules.
     rules:
-      # В тестах можно игнорировать некоторые проверки
+      # Relax certain checks in test files.
       - path: _test\.go
         linters:
           - gocyclo
           - gosec
-          - errcheck  # в тестах иногда допустимо игнорировать Close/Write
+          - errcheck  # Allow ignoring errors for Close/Write in tests.
       
-      # В main.go допустимы необработанные ошибки CLI-хелперов
+      # Allow unchecked errors for CLI helper functions in cmd/.
       - path: cmd/.+
         text: "Error return value of `cli\\.ShowAppHelp`"
         linters:
           - errcheck
       
-      # defer resp.Body.Close() — ошибка закрытия часто не критична
+      # Allow ignoring errors from resp.Body.Close() in defer statements.
+      # The error is rarely actionable and defers run at function exit.
       - path: .+\.go
         text: "Error return value of `.+.Close`"
         linters:
           - errcheck
 
-# Формат вывода
+# Output formatting.
 output:
   formats:
     text:
       colors: true
       print-linter-name: true
       print-issued-lines: true
-  # Сортировка: сначала по файлу, потом по строке
+  # Sort issues by file path, then line number.
   sort-order:
     - file
     - linter
 
-# Severity (опционально, для интеграции с CI)
+# Severity mapping for CI integration.
 severity:
   default: warning
   rules:
+    # Treat security and static analysis issues as errors.
     - linters:
         - gosec
         - staticcheck

@@ -1,3 +1,5 @@
+// Package crawler implements a concurrent web crawler with configurable depth,
+// rate limiting, retry logic, and asset analysis.
 package crawler
 
 import (
@@ -16,25 +18,29 @@ import (
 	"golang.org/x/time/rate"
 )
 
+// crawlTask represents a single URL to be crawled with its current depth.
 type crawlTask struct {
 	url   string
 	depth int
 }
 
+// crawlEngine holds the state for a crawling session.
 type crawlEngine struct {
-	opts      Options
-	client    *http.Client
-	startHost string
-	mu        sync.Mutex
-	visited   map[string]bool
-	queue     chan crawlTask
-	results   []PageReport
-	resultMu  sync.Mutex
-	limiter   *rate.Limiter
-	assetCache  *assetCache
+	opts       Options
+	client     *http.Client
+	startHost  string
+	mu         sync.Mutex
+	visited    map[string]bool
+	queue      chan crawlTask
+	results    []PageReport
+	resultMu   sync.Mutex
+	limiter    *rate.Limiter
+	assetCache *assetCache
 }
 
-// Analyze — точка входа в краулер.
+// Analyze is the main entry point for crawling a website.
+// It returns a JSON-encoded report or an error if the crawl fails to start.
+// The context can be used to cancel the operation gracefully.
 func Analyze(ctx context.Context, opts Options) ([]byte, error) {
 	if opts.URL == "" {
 		return nil, fmt.Errorf("URL is required")
@@ -54,12 +60,12 @@ func Analyze(ctx context.Context, opts Options) ([]byte, error) {
 	}
 
 	engine := &crawlEngine{
-		opts:      opts,
-		client:    client,
-		startHost: startURL.Hostname(),
-		visited:   make(map[string]bool),
-		queue:     make(chan crawlTask, 100),
-		limiter:   createLimiter(opts),
+		opts:       opts,
+		client:     client,
+		startHost:  startURL.Hostname(),
+		visited:    make(map[string]bool),
+		queue:      make(chan crawlTask, 100),
+		limiter:    createLimiter(opts),
 		assetCache: newAssetCache(),
 	}
 
@@ -71,29 +77,33 @@ func Analyze(ctx context.Context, opts Options) ([]byte, error) {
 	return formatReport(opts.URL, opts.Depth, results, opts.IndentJSON)
 }
 
-// createLimiter создаёт rate.Limiter на основе Options.
-// Приоритет: RPS > Delay. Если оба не заданы — лимит бесконечный.
+// createLimiter returns a rate limiter configured from Options.
+// RPS takes precedence over Delay; if neither is set, returns nil (no limiting).
 func createLimiter(opts Options) *rate.Limiter {
-    var limit rate.Limit
-    var burst int
-    
-    if opts.RPS > 0 {
-        limit = rate.Limit(opts.RPS)
-        burst = opts.Concurrency // Используем concurrency как burst
-        if burst < 2 {
-            burst = 2
-        }
-        return rate.NewLimiter(limit, burst)
-    }
-    
-    if opts.Delay > 0 {
-        limit = rate.Limit(1.0 / opts.Delay.Seconds())
-        return rate.NewLimiter(limit, 1)
-    }
-    
-    return nil
+	var limit rate.Limit
+	var burst int
+
+	if opts.RPS > 0 {
+		limit = rate.Limit(opts.RPS)
+		// Allow a small burst to accommodate concurrent workers without starving them.
+		burst = opts.Concurrency
+		if burst < 2 {
+			burst = 2
+		}
+		return rate.NewLimiter(limit, burst)
+	}
+
+	if opts.Delay > 0 {
+		limit = rate.Limit(1.0 / opts.Delay.Seconds())
+		return rate.NewLimiter(limit, 1)
+	}
+
+	return nil
 }
 
+// run orchestrates the concurrent crawling process.
+// It spawns worker goroutines, seeds the queue with the start URL,
+// and collects results once all tasks are complete.
 func (e *crawlEngine) run(ctx context.Context) ([]PageReport, error) {
 	var taskWg sync.WaitGroup
 	var workerWg sync.WaitGroup
@@ -124,11 +134,12 @@ func (e *crawlEngine) run(ctx context.Context) ([]PageReport, error) {
 	return results, nil
 }
 
+// worker processes crawl tasks from the queue.
+// It respects rate limiting, context cancellation, and domain restrictions.
 func (e *crawlEngine) worker(ctx context.Context, taskWg *sync.WaitGroup, workerWg *sync.WaitGroup) {
 	defer workerWg.Done()
 
 	for task := range e.queue {
-		// Проверяем наличие лимитера перед ожиданием
 		if e.limiter != nil {
 			if err := e.limiter.Wait(ctx); err != nil {
 				taskWg.Done()
@@ -168,6 +179,7 @@ func (e *crawlEngine) worker(ctx context.Context, taskWg *sync.WaitGroup, worker
 	}
 }
 
+// normalizeURL removes fragments and trailing slashes for consistent comparison.
 func normalizeURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -181,6 +193,7 @@ func normalizeURL(raw string) string {
 	return u.String()
 }
 
+// formatReport builds the final JSON report, optionally with indentation.
 func formatReport(rootURL string, depth int, results []PageReport, indentJSON bool) ([]byte, error) {
 	sort.Slice(results, func(i, j int) bool {
 		if results[i].Depth != results[j].Depth {
@@ -203,6 +216,7 @@ func formatReport(rootURL string, depth int, results []PageReport, indentJSON bo
 	return json.MarshalIndent(report, "", indent)
 }
 
+// crawlPage fetches a single page and extracts its content, links, SEO data, and assets.
 func crawlPage(ctx context.Context, client *http.Client, limiter *rate.Limiter, assetCache *assetCache, url string, depth int, opts Options) (PageReport, []string) {
 	report := PageReport{URL: url, Depth: depth}
 	if ctx.Err() != nil {
@@ -227,7 +241,8 @@ func crawlPage(ctx context.Context, client *http.Client, limiter *rate.Limiter, 
 	return report, links
 }
 
-// fetchWithRetries выполняет запрос с повторами при временных ошибках
+// fetchWithRetries performs an HTTP request with retry logic for temporary failures.
+// It respects context cancellation and applies exponential backoff between attempts.
 func fetchWithRetries(ctx context.Context, client *http.Client, url string, opts Options) (*http.Response, error) {
 	retryDelay := opts.Delay
 	if retryDelay == 0 {
@@ -237,17 +252,14 @@ func fetchWithRetries(ctx context.Context, client *http.Client, url string, opts
 	for attempt := 0; attempt <= opts.Retries; attempt++ {
 		resp, err := doRequest(ctx, client, url, opts)
 
-		// Если ответ окончательный (успех или постоянная ошибка) — принимаем его
 		if shouldAcceptResponse(err, resp) {
 			return resp, err
 		}
 
-		// Последняя попытка: обрабатываем исчерпание повторов
 		if attempt == opts.Retries {
 			return handleFinalAttempt(resp, err, opts)
 		}
 
-		// Готовимся к следующей попытке
 		closeResponseBody(resp)
 
 		if waitErr := waitForRetry(ctx, retryDelay, attempt); waitErr != nil {
@@ -257,7 +269,7 @@ func fetchWithRetries(ctx context.Context, client *http.Client, url string, opts
 	return nil, fmt.Errorf("unexpected end of retry loop")
 }
 
-// doRequest создаёт и выполняет единичный HTTP-запрос
+// doRequest performs a single HTTP GET request with the configured user agent.
 func doRequest(ctx context.Context, client *http.Client, url string, opts Options) (*http.Response, error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -277,39 +289,37 @@ func doRequest(ctx context.Context, client *http.Client, url string, opts Option
 	return client.Do(req)
 }
 
-// shouldAcceptResponse возвращает true, если ответ не требует повтора
+// shouldAcceptResponse reports whether a response should be accepted without retry.
+// Network errors and temporary status codes (429, 5xx) trigger retries; others do not.
 func shouldAcceptResponse(err error, resp *http.Response) bool {
 	if err != nil {
-		return false // сетевая ошибка → нужно повторить
+		return false
 	}
-	// 2xx, 3xx, 4xx (кроме 429) → окончательный результат
-	// 429, 5xx → временная ошибка → нужно повторить
 	return !isTemporaryStatus(resp.StatusCode)
 }
 
-// handleFinalAttempt обрабатывает ситуацию, когда повторы исчерпаны
+// handleFinalAttempt decides the outcome when retry attempts are exhausted.
+// If retries were configured and the status is temporary, returns an error;
+// otherwise returns the response as-is.
 func handleFinalAttempt(resp *http.Response, err error, opts Options) (*http.Response, error) {
 	if resp != nil {
-		// Если были настроены повторы и статус временный → ошибка
 		if opts.Retries > 0 && isTemporaryStatus(resp.StatusCode) {
 			_ = resp.Body.Close()
 			return nil, fmt.Errorf("temporary status %d after %d retries", resp.StatusCode, opts.Retries)
 		}
-		// Иначе (нет повторов или постоянный статус) → возвращаем ответ
 		return resp, nil
 	}
-	// Сетевая ошибка без ответа
 	return nil, err
 }
 
-// closeResponseBody безопасно закрывает тело ответа
+// closeResponseBody safely closes the response body if present.
 func closeResponseBody(resp *http.Response) {
 	if resp != nil && resp.Body != nil {
 		_ = resp.Body.Close()
 	}
 }
 
-// waitForRetry ожидает перед следующей попыткой с линейным backoff
+// waitForRetry blocks for a backoff duration or until context is cancelled.
 func waitForRetry(ctx context.Context, baseDelay time.Duration, attempt int) error {
 	delay := baseDelay * time.Duration(attempt+1)
 	select {
@@ -320,6 +330,7 @@ func waitForRetry(ctx context.Context, baseDelay time.Duration, attempt int) err
 	}
 }
 
+// analyzePageContent parses HTML and extracts SEO metadata, assets, and broken links.
 func analyzePageContent(
 	ctx context.Context,
 	client *http.Client,
@@ -335,30 +346,27 @@ func analyzePageContent(
 		return nil
 	}
 
-	// SEO (без изменений)
 	seo := extractSEO(doc)
 	if seo.HasTitle || seo.HasDescription || seo.HasH1 {
 		report.SEO = seo
 	}
 
-	// Ассеты
 	assets := extractAssets(baseURL, doc)
 	for _, a := range assets {
 		if ctx.Err() != nil {
 			break
 		}
-	
-		// Атомарная операция: загрузить или взять из кэша
 		asset := assetCache.getOrCreate(a.url, func() *Asset {
 			return checkAsset(ctx, client, limiter, a.url, a.tag, a.attrs)
 		})
 		report.Assets = append(report.Assets, *asset)
 	}
 
-	// Битые ссылки (без изменений)
 	links := extractLinks(baseURL, doc)
 	for _, link := range links {
-		if ctx.Err() != nil { break }
+		if ctx.Err() != nil {
+			break
+		}
 		if broken := checkLink(ctx, client, limiter, link); broken != nil {
 			report.BrokenLinks = append(report.BrokenLinks, *broken)
 		}
@@ -366,7 +374,7 @@ func analyzePageContent(
 	return links
 }
 
-// isTemporaryStatus возвращает true для кодов, указывающих на временную недоступность
+// isTemporaryStatus reports whether an HTTP status code indicates a temporary failure.
 func isTemporaryStatus(code int) bool {
 	return code == http.StatusTooManyRequests || (code >= 500 && code < 600)
 }

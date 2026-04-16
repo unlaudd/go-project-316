@@ -1,3 +1,4 @@
+// Package main provides the CLI entry point for hexlet-go-crawler.
 package main
 
 import (
@@ -9,8 +10,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/urfave/cli/v2"
 	"code/crawler"
+	"github.com/urfave/cli/v2"
 )
 
 func main() {
@@ -26,24 +27,24 @@ func main() {
 				Usage:   "crawl depth",
 			},
 			&cli.IntFlag{
-				Name:    "retries",
-				Value:   1,
-				Usage:   "number of retries for failed requests",
+				Name:  "retries",
+				Value: 1,
+				Usage: "number of retries for failed requests",
 			},
 			&cli.DurationFlag{
-				Name:    "delay",
-				Value:   0,
-				Usage:   "delay between requests (example: 200ms, 1s)",
+				Name:  "delay",
+				Value: 0,
+				Usage: "delay between requests (example: 200ms, 1s)",
 			},
 			&cli.DurationFlag{
-				Name:    "timeout",
-				Value:   15 * time.Second,
-				Usage:   "per-request timeout",
+				Name:  "timeout",
+				Value: 15 * time.Second,
+				Usage: "per-request timeout",
 			},
 			&cli.Float64Flag{
-				Name:    "rps",
-				Value:   0,
-				Usage:   "limit requests per second (overrides delay)",
+				Name:  "rps",
+				Value: 0,
+				Usage: "limit requests per second (overrides delay)",
 			},
 			&cli.StringFlag{
 				Name:    "user-agent",
@@ -65,7 +66,7 @@ func main() {
 		Action: run,
 	}
 
-	// Обработка сигналов для корректной отмены через context
+	// Set up context with signal handling for graceful shutdown on SIGINT/SIGTERM.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -74,14 +75,16 @@ func main() {
 	}
 }
 
+// run executes the crawler with options parsed from CLI context.
+// Errors during analysis are logged to stderr but do not cause a non-zero exit,
+// allowing partial results to be output when possible.
 func run(c *cli.Context) error {
-    // Проверка наличия URL
-    if c.NArg() == 0 {
-        if err := cli.ShowAppHelp(c); err != nil {
-            fmt.Fprintf(os.Stderr, "failed to show help: %v\n", err)
-        }
-        return nil
-    }
+	if c.NArg() == 0 {
+		if err := cli.ShowAppHelp(c); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to show help: %v\n", err)
+		}
+		return nil
+	}
 
 	url := c.Args().First()
 
@@ -103,10 +106,12 @@ func run(c *cli.Context) error {
 
 	result, err := crawler.Analyze(ctx, opts)
 	if err != nil {
+		// Log analysis errors to stderr but continue to output partial results.
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 	}
 
-	// Выводим отчёт в stdout
+	// Output the JSON report to stdout. Using println ensures a trailing newline,
+	// which is expected by most JSON parsers and shell tools.
 	if len(result) > 0 {
 		fmt.Println(string(result))
 	}

@@ -1,11 +1,15 @@
+// Package crawler provides SEO metadata extraction from HTML documents.
 package crawler
 
 import (
-	"golang.org/x/net/html"
 	"strings"
+
+	"golang.org/x/net/html"
 )
 
-// extractSEO извлекает базовые SEO-метрики из распарсенного HTML-документа
+// extractSEO parses an HTML document and extracts basic SEO metadata.
+// It looks for <title>, <meta name="description">, and <h1> tags.
+// Returns an SEO struct with populated fields; boolean flags indicate presence.
 func extractSEO(doc *html.Node) *SEO {
 	seo := &SEO{}
 
@@ -14,13 +18,14 @@ func extractSEO(doc *html.Node) *SEO {
 		if n.Type == html.ElementNode {
 			switch n.Data {
 			case "title":
+				// Extract text content from <title> tag.
 				if n.FirstChild != nil && n.FirstChild.Type == html.TextNode {
 					seo.Title = html.UnescapeString(strings.TrimSpace(n.FirstChild.Data))
 					seo.HasTitle = seo.Title != ""
 				}
 
 			case "meta":
-				// Ищем <meta name="description" content="...">
+				// Look for <meta name="description" content="...">.
 				var name, content string
 				for _, attr := range n.Attr {
 					switch attr.Key {
@@ -36,8 +41,9 @@ func extractSEO(doc *html.Node) *SEO {
 				}
 
 			case "h1":
+				// Record presence of a non-empty <h1> tag.
+				// We only need to know if at least one exists, so skip after first.
 				if !seo.HasH1 {
-					// Собираем текст из всех текстовых нод внутри h1
 					var h1Text strings.Builder
 					collectText(n, &h1Text)
 					text := html.UnescapeString(strings.TrimSpace(h1Text.String()))
@@ -47,6 +53,7 @@ func extractSEO(doc *html.Node) *SEO {
 				}
 			}
 		}
+		// Recurse into child nodes.
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
 			walk(c)
 		}
@@ -56,7 +63,8 @@ func extractSEO(doc *html.Node) *SEO {
 	return seo
 }
 
-// collectText рекурсивно собирает текстовое содержимое узла
+// collectText recursively accumulates text content from an HTML node and its descendants.
+// It appends raw text node data to the provided strings.Builder.
 func collectText(n *html.Node, sb *strings.Builder) {
 	if n.Type == html.TextNode {
 		sb.WriteString(n.Data)

@@ -1,3 +1,4 @@
+// Package crawler provides asset extraction and validation functionality.
 package crawler
 
 import (
@@ -5,39 +6,45 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
-	"strconv"
 
 	"golang.org/x/net/html"
 	"golang.org/x/time/rate"
 )
 
-// Константы для goconst
+// HTML tag constants for asset detection.
 const (
-	// HTML теги
-	tagImg   = "img"
+	tagImg    = "img"
 	tagScript = "script"
-	tagLink  = "link"
-	
-	// HTML атрибуты
-	attrSrc  = "src"
-	attrHref = "href"
-	attrRel  = "rel"
+	tagLink   = "link"
+)
+
+// HTML attribute constants.
+const (
+	attrSrc           = "src"
+	attrHref          = "href"
+	attrRel           = "rel"
 	attrRelStylesheet = "stylesheet"
-	
-	// Типы ассетов
-	typeImage = "image"
+)
+
+// Asset type constants.
+const (
+	typeImage  = "image"
 	typeScript = "script"
-	typeStyle = "style"
-	typeOther = "other"
-	
-	// Схемы URL
+	typeStyle  = "style"
+	typeOther  = "other"
+)
+
+// URL scheme constants.
+const (
 	schemeHTTP  = "http"
 	schemeHTTPS = "https"
 )
 
-// assetCache кэширует результаты проверки ассетов (глобально для всего обхода)
+// assetCache provides thread-safe caching for asset check results.
+// It implements a single-flight pattern to prevent duplicate requests for the same URL.
 type assetCache struct {
 	mu      sync.Mutex
 	cache   map[string]*Asset
@@ -51,7 +58,7 @@ func newAssetCache() *assetCache {
 	}
 }
 
-// detectAssetType определяет тип ассета по тегу и атрибутам
+// detectAssetType determines the asset type based on HTML tag and attributes.
 func detectAssetType(tagName string, attrs map[string]string) string {
 	switch tagName {
 	case tagImg:
@@ -66,12 +73,12 @@ func detectAssetType(tagName string, attrs map[string]string) string {
 	return typeOther
 }
 
-// Вспомогательная: проверяет, является ли тег ассетом
+// isAssetTag reports whether the given tag name represents a loadable asset.
 func isAssetTag(tagName string) bool {
 	return tagName == tagImg || tagName == tagScript || tagName == tagLink
 }
 
-// Вспомогательная: извлекает src/href из атрибутов в зависимости от тега
+// getAssetSrc extracts the source URL from tag attributes.
 func getAssetSrc(tagName string, attrs map[string]string) string {
 	switch tagName {
 	case tagImg, tagScript:
@@ -84,46 +91,46 @@ func getAssetSrc(tagName string, attrs map[string]string) string {
 	return ""
 }
 
-// Вспомогательная: проверяет и резолвит URL ассета
+// resolveAssetURL validates and normalizes a relative or absolute asset URL.
+// Returns the normalized absolute URL and true if valid, or empty string and false otherwise.
 func resolveAssetURL(src, baseURL string) (string, bool) {
 	if src == "" || strings.HasPrefix(src, "#") || strings.HasPrefix(src, "data:") {
 		return "", false
 	}
-	
+
 	base, err := url.Parse(baseURL)
 	if err != nil {
 		return "", false
 	}
-	
+
 	parsed, err := url.Parse(src)
 	if err != nil {
 		return "", false
 	}
-	
+
 	if parsed.Scheme == "" {
 		parsed = base.ResolveReference(parsed)
 	}
-	
+
 	isValid := parsed.IsAbs() && (parsed.Scheme == schemeHTTP || parsed.Scheme == schemeHTTPS)
 	if !isValid {
 		return "", false
 	}
-	
-	// Нормализуем перед возвратом
+
 	return normalizeURLForCache(parsed.String()), true
 }
 
-// assetInfo хранит данные об извлечённом ассете
+// assetInfo holds intermediate data for an extracted asset.
 type assetInfo struct {
 	url   string
 	tag   string
 	attrs map[string]string
 }
 
-// extractAssets извлекает список ассетов из HTML-документа
+// extractAssets parses an HTML document and returns a list of loadable assets.
 func extractAssets(baseURL string, doc *html.Node) []assetInfo {
 	var assets []assetInfo
-	
+
 	var walk func(*html.Node)
 	walk = func(n *html.Node) {
 		if n.Type != html.ElementNode {
@@ -162,7 +169,7 @@ func extractAssets(baseURL string, doc *html.Node) []assetInfo {
 	return assets
 }
 
-// Вспомогательная: создаёт и выполняет единичный запрос к ассету
+// doAssetRequest performs a single HTTP request with the given method and user agent.
 func doAssetRequest(ctx context.Context, client *http.Client, rawURL, method, ua string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, rawURL, nil)
 	if err != nil {
@@ -172,14 +179,15 @@ func doAssetRequest(ctx context.Context, client *http.Client, rawURL, method, ua
 	return client.Do(req)
 }
 
-// Вспомогательная: определяет размер ассета из заголовка или тела ответа
+// determineAssetSize extracts the content size from response headers or body.
+// Returns the size in bytes and an error message if reading the body fails.
 func determineAssetSize(resp *http.Response) (int64, string) {
 	if cl := resp.Header.Get("Content-Length"); cl != "" {
 		if size, err := strconv.ParseInt(cl, 10, 64); err == nil {
 			return size, ""
 		}
 	}
-	
+
 	if resp.StatusCode < 400 {
 		n, err := io.Copy(io.Discard, resp.Body)
 		if err != nil {
@@ -187,11 +195,12 @@ func determineAssetSize(resp *http.Response) (int64, string) {
 		}
 		return n, ""
 	}
-	
+
 	return 0, ""
 }
 
-// checkAsset проверяет доступность и метаданные ассета (оптимизированная версия)
+// checkAsset fetches an asset and populates its metadata.
+// It attempts a HEAD request first for efficiency, falling back to GET if needed.
 func checkAsset(ctx context.Context, client *http.Client, limiter *rate.Limiter, rawURL string, tag string, attrs map[string]string) *Asset {
 	asset := &Asset{
 		URL:  rawURL,
@@ -206,14 +215,13 @@ func checkAsset(ctx context.Context, client *http.Client, limiter *rate.Limiter,
 	}
 
 	const userAgent = "hexlet-go-crawler/1.0"
-	
-	// 1. Пробуем HEAD для экономии трафика
+
 	resp, err := doAssetRequest(ctx, client, rawURL, http.MethodHead, userAgent)
-	
-	// 2. Фоллбэк на GET, если HEAD не поддерживается (405) или произошла сетевая ошибка
-	// Обратите внимание: мы НЕ фоллбечимся на 404/500, так как это валидный ответ
+
+	// Fallback to GET if HEAD is not supported or a network error occurred.
+	// Note: HTTP error codes like 404 or 500 are valid responses and do not trigger fallback.
 	shouldFallback := err != nil || (resp != nil && resp.StatusCode == http.StatusMethodNotAllowed)
-	
+
 	if shouldFallback {
 		if resp != nil && resp.Body != nil {
 			_ = resp.Body.Close()
@@ -229,7 +237,7 @@ func checkAsset(ctx context.Context, client *http.Client, limiter *rate.Limiter,
 
 	asset.StatusCode = resp.StatusCode
 	asset.SizeBytes, asset.Error = determineAssetSize(resp)
-	
+
 	if asset.StatusCode >= 400 && asset.Error == "" {
 		asset.Error = http.StatusText(asset.StatusCode)
 	}
@@ -237,45 +245,42 @@ func checkAsset(ctx context.Context, client *http.Client, limiter *rate.Limiter,
 	return asset
 }
 
+// getOrCreate returns a cached asset or fetches it using the provided fetcher.
+// It guarantees that fetcher is called at most once per URL, even under concurrent access.
 func (c *assetCache) getOrCreate(url string, fetcher func() *Asset) *Asset {
 	c.mu.Lock()
-	
-	// Если уже в кэше — возвращаем
+
 	if asset, ok := c.cache[url]; ok {
 		c.mu.Unlock()
 		return asset
 	}
-	
-	// Если уже загружается — ждём завершения
+
 	if waitCh, ok := c.loading[url]; ok {
 		c.mu.Unlock()
-		<-waitCh // Блокируемся, пока загрузка не завершится
-		// После ожидания берём результат из кэша
+		<-waitCh
 		c.mu.Lock()
 		asset := c.cache[url]
 		c.mu.Unlock()
 		return asset
 	}
-	
-	// Начинаем загрузку: создаём канал и регистрируем его
+
 	waitCh := make(chan struct{})
 	c.loading[url] = waitCh
 	c.mu.Unlock()
-	
-	// Загружаем ассет (вне критической секции, чтобы не блокировать другие URL)
+
 	asset := fetcher()
-	
-	// Сохраняем результат и уведомляем ожидающих
+
 	c.mu.Lock()
 	delete(c.loading, url)
 	c.cache[url] = asset
 	c.mu.Unlock()
-	close(waitCh) // Разблокируем всех ожидающих
-	
+	close(waitCh)
+
 	return asset
 }
 
-// normalizeURLForCache приводит URL к единому виду для кэширования
+// normalizeURLForCache normalizes a URL for consistent cache key generation.
+// It removes fragments and trailing slashes to treat equivalent URLs as identical.
 func normalizeURLForCache(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {

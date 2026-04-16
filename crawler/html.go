@@ -1,3 +1,4 @@
+// Package crawler provides HTML parsing utilities for link extraction.
 package crawler
 
 import (
@@ -7,13 +8,16 @@ import (
 	"golang.org/x/net/html"
 )
 
-// supportedSchemes перечисляет схемы, которые мы проверяем
+// supportedSchemes lists the URL schemes that the crawler processes.
+// Only HTTP and HTTPS links are followed; other schemes are ignored.
 var supportedSchemes = map[string]bool{
 	"http":  true,
 	"https": true,
 }
 
-// extractLinks извлекает все абсолютные HTTP(S)-ссылки из HTML-документа
+// extractLinks parses an HTML document and returns a list of absolute HTTP(S) links.
+// Links are resolved relative to baseURL when necessary. Fragments, empty hrefs,
+// and unsupported schemes are filtered out.
 func extractLinks(baseURL string, doc *html.Node) []string {
 	var links []string
 	base, err := url.Parse(baseURL)
@@ -30,30 +34,34 @@ func extractLinks(baseURL string, doc *html.Node) []string {
 					if href == "" {
 						continue
 					}
-					// Игнорируем якоря и фрагменты той же страницы
+					// Skip fragment-only links (e.g., "#section") as they don't navigate away.
 					if strings.HasPrefix(href, "#") {
 						continue
 					}
-					// Пытаемся распарсить и резолвить ссылку
+
 					linkURL, err := url.Parse(href)
 					if err != nil {
 						continue
 					}
-					// Пропускаем неподдерживаемые схемы
+
+					// Ignore links with unsupported schemes (mailto:, ftp:, etc.).
 					if !supportedSchemes[linkURL.Scheme] && linkURL.Scheme != "" {
 						continue
 					}
-					// Если схема не указана — резолвим относительно базового URL
+
+					// Resolve relative URLs against the base URL.
 					if linkURL.Scheme == "" {
 						linkURL = base.ResolveReference(linkURL)
 					}
-					// Добавляем только валидные абсолютные ссылки
+
+					// Only include absolute HTTP(S) links.
 					if linkURL.IsAbs() && supportedSchemes[linkURL.Scheme] {
 						links = append(links, linkURL.String())
 					}
 				}
 			}
 		}
+		// Recurse into child nodes.
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
 			walk(c)
 		}
