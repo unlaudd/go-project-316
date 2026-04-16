@@ -367,8 +367,13 @@ func analyzePageContent(
 	}
 
 	seo := extractSEO(doc)
-	if seo.HasTitle || seo.HasDescription || seo.HasH1 {
-		report.SEO = seo
+	// ← Всегда копируем данные в существующий report.SEO
+	if report.SEO != nil {
+		report.SEO.HasTitle = seo.HasTitle
+		report.SEO.Title = seo.Title
+		report.SEO.HasDescription = seo.HasDescription
+		report.SEO.Description = seo.Description
+		report.SEO.HasH1 = seo.HasH1
 	}
 
 	assets := extractAssets(baseURL, doc)
@@ -390,12 +395,10 @@ func analyzePageContent(
 		if ctx.Err() != nil {
 			break
 		}
-		
 		if broken := checkLink(ctx, client, limiter, link); broken != nil {
-			// Нормализуем URL для надёжной дедупликации
-			normalURL := normalizeURLForCache(link)
-			if _, exists := seenBroken[normalURL]; !exists {
-				seenBroken[normalURL] = struct{}{}
+			// Используем link напрямую — он уже нормализован в extractLinks
+			if _, exists := seenBroken[link]; !exists {
+				seenBroken[link] = struct{}{}
 				report.BrokenLinks = append(report.BrokenLinks, *broken)
 			}
 		}
