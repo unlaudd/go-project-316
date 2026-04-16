@@ -222,8 +222,8 @@ func crawlPage(ctx context.Context, client *http.Client, limiter *rate.Limiter, 
 	report := PageReport{
 		URL:   url,
 		Depth: depth,
-		SEO:   SEO{},
-		// BrokenLinks и Assets = nil → будут null в JSON при ошибке
+		SEO:   SEO{},  // ← Значение, всегда будет {} в JSON
+		// BrokenLinks и Assets намеренно НЕ инициализируем → будут null при ошибке
 	}
 	
 	if ctx.Err() != nil {
@@ -236,7 +236,8 @@ func crawlPage(ctx context.Context, client *http.Client, limiter *rate.Limiter, 
 	if err != nil {
 		report.Status = "error"
 		report.Error = err.Error()
-		return report, nil // ← nil-поля → null в JSON
+		// ← Возвращаем с nil-полями → в JSON будет null
+		return report, nil
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -382,83 +383,28 @@ func analyzePageContent(
 
 	links := extractLinks(baseURL, doc)
 	
-	// Определяем хост и глубину
-	startURL, _ := url.Parse(baseURL)
-	nextDepth := report.Depth + 1
-	canFollow := nextDepth < opts.Depth
-	
-	// Инициализируем срез
-	report.BrokenLinks = []BrokenLink{}
-	
-	// Дедупликация по точному совпадению (extractLinks уже нормализовал)
+	// Дедупликация по точному совпадению
 	seenBroken := make(map[string]struct{})
 
 	for _, link := range links {
 		if ctx.Err() != nil {
 			break
 		}
-
-		parsed, err := url.Parse(link)
-		if err != nil {
-			continue
-		}
-
-		// Пропускаем ссылки на саму страницу
-		if isSamePage(parsed, startURL) {
-			continue
-		}
-
-		// Определяем, внутренняя ли ссылка
-		isInternal := parsed.Hostname() == startURL.Hostname()
-		
-		// ← КЛЮЧЕВОЕ: если ссылка внутренняя и будет краулиться — не проверяем на битость сейчас
-		// Она будет проверена при загрузке самой страницы
-		if isInternal && canFollow {
-			continue
-		}
-
-		// Дедупликация
-		if _, exists := seenBroken[link]; exists {
-			continue
-		}
-		seenBroken[link] = struct{}{}
-
-		// Проверяем ссылку на доступность
 		if broken := checkLink(ctx, client, limiter, link); broken != nil {
-			report.BrokenLinks = append(report.BrokenLinks, *broken)
+			if _, exists := seenBroken[link]; !exists {
+				seenBroken[link] = struct{}{}
+				report.BrokenLinks = append(report.BrokenLinks, *broken)
+			}
 		}
 	}
 
-	// Сортировка для стабильного порядка в JSON
 	sort.Slice(report.BrokenLinks, func(i, j int) bool {
 		return report.BrokenLinks[i].URL < report.BrokenLinks[j].URL
 	})
-
 	return links
 }
 
 // isTemporaryStatus reports whether an HTTP status code indicates a temporary failure.
 func isTemporaryStatus(code int) bool {
 	return code == http.StatusTooManyRequests || (code >= 500 && code < 600)
-}
-
-// canonURL нормализует URL для сравнения (удаляет фрагмент, приводит путь)
-func canonURL(u *url.URL) string {
-	if u == nil {
-		return ""
-	}
-	cp := *u
-	cp.Fragment = ""
-	if cp.Path == "" {
-		cp.Path = "/"
-	}
-	return cp.String()
-}
-
-// isSamePage проверяет, ведут ли два URL на одну и ту же страницу
-func isSamePage(a, b *url.URL) bool {
-	if a == nil || b == nil {
-		return false
-	}
-	return canonURL(a) == canonURL(b)
 }
