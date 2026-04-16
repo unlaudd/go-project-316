@@ -444,7 +444,7 @@ func TestAnalyze_DomainRestriction(t *testing.T) {
 	})
 	mux.HandleFunc("/internal", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("Internal"))
+		_, _ = w.Write([]byte("Internal"))
 	})
 
 	server := httptest.NewServer(mux)
@@ -487,7 +487,7 @@ func TestAnalyze_Deduplication(t *testing.T) {
 	})
 	mux.HandleFunc("/target", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("Target"))
+		_, _ = w.Write([]byte("Target"))
 	})
 
 	server := httptest.NewServer(mux)
@@ -528,7 +528,7 @@ func TestAnalyze_ContextCancellation(t *testing.T) {
 	})
 	mux.HandleFunc("/page1", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("Page 1"))
+		_, _ = w.Write([]byte("Page 1"))
 	})
 
 	server := httptest.NewServer(mux)

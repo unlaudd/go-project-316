@@ -217,15 +217,17 @@ func formatReport(rootURL string, depth int, results []PageReport, indentJSON bo
 }
 
 // crawlPage fetches a single page and extracts its content, links, SEO data, and assets.
+// For successful responses, BrokenLinks and Assets are initialized as empty slices ([]).
+// For errors, these fields remain nil and serialize as null in JSON output.
 func crawlPage(ctx context.Context, client *http.Client, limiter *rate.Limiter, assetCache *assetCache, url string, depth int, opts Options) (PageReport, []string) {
-	// SEO всегда объект, остальное — нулевые значения (null в JSON при ошибке)
+	// Initialize report with SEO as empty struct (always serializes as {} in JSON).
+	// BrokenLinks and Assets are intentionally left nil to serialize as null on error.
 	report := PageReport{
 		URL:   url,
 		Depth: depth,
-		SEO:   SEO{},  // ← Значение, всегда будет {} в JSON
-		// BrokenLinks и Assets намеренно НЕ инициализируем → будут null при ошибке
+		SEO:   SEO{},
 	}
-	
+
 	if ctx.Err() != nil {
 		report.Status = "skipped"
 		report.Error = ctx.Err().Error()
@@ -236,21 +238,21 @@ func crawlPage(ctx context.Context, client *http.Client, limiter *rate.Limiter, 
 	if err != nil {
 		report.Status = "error"
 		report.Error = err.Error()
-		// ← Возвращаем с nil-полями → в JSON будет null
+		// Return with nil slices for BrokenLinks/Assets to serialize as null in JSON.
 		return report, nil
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	report.HTTPStatus = resp.StatusCode
 	report.Status = "ok"
-	
-	// ← ТОЛЬКО для успешных страниц инициализируем срезы → [] в JSON
+
+	// Initialize slices only for successful responses to serialize as [] in JSON.
 	report.BrokenLinks = []BrokenLink{}
 	report.Assets = []Asset{}
 
 	links := analyzePageContent(ctx, client, limiter, assetCache, resp.Body, url, &report, opts)
 
-	// Сортировка ассетов для стабильного вывода
+	// Sort assets by type then URL for stable JSON output.
 	sort.Slice(report.Assets, func(i, j int) bool {
 		if report.Assets[i].Type != report.Assets[j].Type {
 			return report.Assets[i].Type < report.Assets[j].Type
@@ -352,6 +354,7 @@ func waitForRetry(ctx context.Context, baseDelay time.Duration, attempt int) err
 }
 
 // analyzePageContent parses HTML and extracts SEO metadata, assets, and broken links.
+// It populates the provided PageReport with extracted data.
 func analyzePageContent(
 	ctx context.Context,
 	client *http.Client,
@@ -382,8 +385,8 @@ func analyzePageContent(
 	}
 
 	links := extractLinks(baseURL, doc)
-	
-	// Дедупликация по точному совпадению
+
+	// Deduplicate broken links by exact URL match.
 	seenBroken := make(map[string]struct{})
 
 	for _, link := range links {
@@ -398,6 +401,7 @@ func analyzePageContent(
 		}
 	}
 
+	// Sort broken links by URL for stable JSON output.
 	sort.Slice(report.BrokenLinks, func(i, j int) bool {
 		return report.BrokenLinks[i].URL < report.BrokenLinks[j].URL
 	})
@@ -405,6 +409,28 @@ func analyzePageContent(
 }
 
 // isTemporaryStatus reports whether an HTTP status code indicates a temporary failure.
+// Status codes 429 (Too Many Requests) and 5xx (Server Errors) are considered temporary.
 func isTemporaryStatus(code int) bool {
 	return code == http.StatusTooManyRequests || (code >= 500 && code < 600)
+}
+
+// canonURL normalizes a URL for consistent comparison by removing fragments and standardizing the path.
+func canonURL(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	cp := *u
+	cp.Fragment = ""
+	if cp.Path == "" {
+		cp.Path = "/"
+	}
+	return cp.String()
+}
+
+// isSamePage reports whether two URLs refer to the same page, ignoring fragments.
+func isSamePage(a, b *url.URL) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	return canonURL(a) == canonURL(b)
 }
