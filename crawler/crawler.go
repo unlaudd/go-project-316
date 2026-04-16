@@ -218,7 +218,14 @@ func formatReport(rootURL string, depth int, results []PageReport, indentJSON bo
 
 // crawlPage fetches a single page and extracts its content, links, SEO data, and assets.
 func crawlPage(ctx context.Context, client *http.Client, limiter *rate.Limiter, assetCache *assetCache, url string, depth int, opts Options) (PageReport, []string) {
-	report := PageReport{URL: url, Depth: depth}
+	report := PageReport{
+		URL:         url,
+		Depth:       depth,
+		BrokenLinks: []BrokenLink{},
+		Assets:      []Asset{},
+		SEO:         &SEO{},
+	}
+
 	if ctx.Err() != nil {
 		report.Status = "skipped"
 		report.Error = ctx.Err().Error()
@@ -228,7 +235,7 @@ func crawlPage(ctx context.Context, client *http.Client, limiter *rate.Limiter, 
 	resp, err := fetchWithRetries(ctx, client, url, opts)
 	if err != nil {
 		report.Status = "error"
-		report.Error = fmt.Sprintf("request failed: %v", err)
+		report.Error = err.Error()
 		return report, nil
 	}
 	defer func() { _ = resp.Body.Close() }()

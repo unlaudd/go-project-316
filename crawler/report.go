@@ -57,7 +57,7 @@ type PageReport struct {
 	// Status indicates the outcome: "ok", "error", or "skipped".
 	Status string `json:"status"`
 	// Error contains a description if Status is "error" or "skipped" (empty otherwise).
-	Error string `json:"error"`
+	Error string `json:"error,omitempty"`
 	// BrokenLinks lists all links on the page that failed to load.
 	BrokenLinks []BrokenLink `json:"broken_links"`
 	// DiscoveredAt is the timestamp when the page was first crawled.
