@@ -245,7 +245,20 @@ func crawlPage(ctx context.Context, client *http.Client, limiter *rate.Limiter, 
 	report.Assets = []Asset{}
 
 	links := analyzePageContent(ctx, client, limiter, assetCache, resp.Body, opts.URL, &report, opts)
-	
+	sort.Slice(report.Assets, func(i, j int) bool {
+		return report.Assets[i].URL < report.Assets[j].URL
+	})
+
+	seenBroken := make(map[string]bool)
+	uniqueBroken := []BrokenLink{}
+	for _, bl := range report.BrokenLinks {
+		if !seenBroken[bl.URL] {
+			seenBroken[bl.URL] = true
+			uniqueBroken = append(uniqueBroken, bl)
+		}
+	}
+	report.BrokenLinks = uniqueBroken
+
 	report.DiscoveredAt = time.Now().UTC()
 	return report, links
 }
