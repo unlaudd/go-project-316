@@ -248,8 +248,9 @@ func crawlPage(ctx context.Context, client *http.Client, limiter *rate.Limiter, 
 	seenBroken := make(map[string]bool)
 	uniqueBroken := make([]BrokenLink, 0, len(report.BrokenLinks))
 	for _, bl := range report.BrokenLinks {
-		if !seenBroken[bl.URL] {
-			seenBroken[bl.URL] = true
+		normalized := normalizeURL(bl.URL)
+		if !seenBroken[normalized] {
+			seenBroken[normalized] = true
 			uniqueBroken = append(uniqueBroken, bl)
 		}
 	}
