@@ -389,13 +389,17 @@ func analyzePageContent(
 
 	links := extractLinks(baseURL, doc)
 	
+	// Определяем хост и глубину для фильтрации
+	startURL, _ := url.Parse(baseURL)
+	nextDepth := report.Depth + 1
+	canFollow := nextDepth < opts.Depth
+	
+	currentURL, _ := url.Parse(baseURL)
+	
 	// Инициализируем срез
 	report.BrokenLinks = []BrokenLink{}
 	
-	// Парсим текущий URL для сравнения
-	currentURL, _ := url.Parse(baseURL)
-	
-	// Дедупликация по точному совпадению
+	// Дедупликация по точному совпадению (extractLinks уже нормализовал)
 	seenBroken := make(map[string]struct{})
 
 	for _, link := range links {
@@ -408,15 +412,19 @@ func analyzePageContent(
 			continue
 		}
 
-		// ← КЛЮЧЕВОЕ: пропускаем ссылки на саму страницу
-		// (как в референсном коде: isSamePage)
-		if currentURL != nil {
-			if isSamePage(parsed, currentURL) {
-				continue
-			}
+		// Пропускаем ссылки на саму страницу
+		if currentURL != nil && isSamePage(parsed, currentURL) {
+			continue
 		}
 
-		// Пропускаем дубликаты
+		// ← КЛЮЧЕВОЕ: если ссылка внутренняя и будет краулиться — не проверяем на битость сейчас
+		// Она будет проверена при загрузке самой страницы
+		isInternal := startURL != nil && parsed.Hostname() == startURL.Hostname()
+		if isInternal && canFollow {
+			continue
+		}
+
+		// Дедупликация
 		if _, exists := seenBroken[link]; exists {
 			continue
 		}

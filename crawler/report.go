@@ -25,7 +25,7 @@ type BrokenLink struct {
 	// URL is the absolute URL of the broken link.
 	URL string `json:"url"`
 	// StatusCode is the HTTP status code received (0 for network errors).
-	StatusCode int `json:"status_code"`
+	StatusCode int `json:"status_code,omitempty"`
 	// Error contains a description of the failure (empty if only status code is available).
 	Error string `json:"error"`
 }
@@ -38,9 +38,9 @@ type Asset struct {
 	// Type categorizes the asset: "image", "script", "style", or "other".
 	Type string `json:"type"`
 	// StatusCode is the HTTP status code received when fetching the asset.
-	StatusCode int `json:"status_code"`
+	StatusCode int `json:"status_code,omitempty"`
 	// SizeBytes is the size of the asset in bytes (0 if unknown).
-	SizeBytes int64 `json:"size_bytes"`
+	SizeBytes int64 `json:"size_bytes,omitempty"`
 	// Error contains a description of any fetch error (empty on success).
 	Error      string `json:"error,omitempty"`
 }
