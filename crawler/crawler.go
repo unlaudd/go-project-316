@@ -390,12 +390,37 @@ func analyzePageContent(
 	// Дедупликация битых ссылок по нормализованному URL
 	
 	links := extractLinks(baseURL, doc)
+	
+	// Дедупликация битых ссылок на уровне host+path
+	// защищает от дубликатов вида http://site/page и https://site/page
+	seenBroken := make(map[string]struct{})
+	
 	for _, link := range links {
 		if ctx.Err() != nil {
 			break
 		}
 		if broken := checkLink(ctx, client, limiter, link); broken != nil {
-			report.BrokenLinks = append(report.BrokenLinks, *broken)
+			// Нормализуем ключ: убираем схему, порт по умолчанию, фрагмент, слэш
+			if u, err := url.Parse(broken.URL); err == nil {
+				u.Scheme = ""
+				if u.Port() == "80" || u.Port() == "443" {
+					u.Host = u.Hostname()
+				}
+				u.Fragment = ""
+				u.Path = strings.TrimSuffix(u.Path, "/")
+				if u.Path == "" {
+					u.Path = "/"
+				}
+				key := u.String()
+				
+				if _, exists := seenBroken[key]; !exists {
+					seenBroken[key] = struct{}{}
+					report.BrokenLinks = append(report.BrokenLinks, *broken)
+				}
+			} else {
+				// Если URL не парсится, используем как есть
+				report.BrokenLinks = append(report.BrokenLinks, *broken)
+			}
 		}
 	}
 	return links
