@@ -9,8 +9,8 @@ import (
 
 // extractSEO parses an HTML document and extracts basic SEO metadata.
 // It looks for <title>, <meta name="description">, and <h1> tags.
-func extractSEO(doc *html.Node) *SEO {
-	seo := &SEO{}
+func extractSEO(doc *html.Node) SEO {  // ← Возвращаем значение
+	seo := SEO{}  // ← Локальное значение
 
 	var walk func(*html.Node)
 	walk = func(n *html.Node) {
@@ -23,11 +23,11 @@ func extractSEO(doc *html.Node) *SEO {
 
 		switch n.Data {
 		case "title":
-			extractTitle(n, seo)
+			extractTitle(n, &seo)  // ← Передаём адрес (&seo)
 		case "meta":
-			extractMetaDescription(n, seo)
+			extractMetaDescription(n, &seo)  // ← Передаём адрес
 		case "h1":
-			extractH1(n, seo)
+			extractH1(n, &seo)  // ← Передаём адрес
 		}
 
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
@@ -36,10 +36,11 @@ func extractSEO(doc *html.Node) *SEO {
 	}
 	walk(doc)
 
-	return seo
+	return seo  // ← Возвращаем значение
 }
 
 // extractTitle extracts text content from a <title> element.
+// Принимает *SEO для модификации полей
 func extractTitle(n *html.Node, seo *SEO) {
 	if seo.HasTitle {
 		return
@@ -55,6 +56,7 @@ func extractTitle(n *html.Node, seo *SEO) {
 }
 
 // extractMetaDescription extracts content from <meta name="description">.
+// Принимает *SEO для модификации полей
 func extractMetaDescription(n *html.Node, seo *SEO) {
 	var name, content string
 	for _, attr := range n.Attr {
@@ -72,6 +74,7 @@ func extractMetaDescription(n *html.Node, seo *SEO) {
 }
 
 // extractH1 checks for the presence of a non-empty <h1> element.
+// Принимает *SEO для модификации полей
 func extractH1(n *html.Node, seo *SEO) {
 	if seo.HasH1 {
 		return

@@ -27,7 +27,7 @@ type BrokenLink struct {
 	// StatusCode is the HTTP status code received (0 for network errors).
 	StatusCode int `json:"status_code,omitempty"`
 	// Error contains a description of the failure (empty if only status code is available).
-	Error string `json:"error"`
+	Error      string `json:"error,omitempty"`
 }
 
 // Asset represents an external resource referenced by a page (image, script, or stylesheet).
@@ -63,7 +63,7 @@ type PageReport struct {
 	// DiscoveredAt is the timestamp when the page was first crawled.
 	DiscoveredAt time.Time `json:"discovered_at"`
 	// SEO contains extracted SEO metadata (nil if none found).
-	SEO *SEO `json:"seo"`
+	SEO          SEO                `json:"seo"`
 	// Assets lists all external resources referenced by the page.
 	Assets []Asset `json:"assets"`
 }

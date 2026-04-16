@@ -222,7 +222,7 @@ func crawlPage(ctx context.Context, client *http.Client, limiter *rate.Limiter, 
 	report := PageReport{
 		URL:   url,
 		Depth: depth,
-		SEO:   &SEO{}, 
+		SEO:   SEO{},
 		// BrokenLinks и Assets = nil → будут null в JSON при ошибке
 	}
 	
@@ -367,14 +367,7 @@ func analyzePageContent(
 	}
 
 	seo := extractSEO(doc)
-	// ← Всегда копируем значения в существующий объект report.SEO
-	if report.SEO != nil {
-		report.SEO.HasTitle = seo.HasTitle
-		report.SEO.Title = seo.Title
-		report.SEO.HasDescription = seo.HasDescription
-		report.SEO.Description = seo.Description
-		report.SEO.HasH1 = seo.HasH1
-	}
+	report.SEO = seo
 
 	assets := extractAssets(baseURL, doc)
 	for _, a := range assets {
@@ -388,88 +381,24 @@ func analyzePageContent(
 	}
 
 	links := extractLinks(baseURL, doc)
-	
-	// Определяем хост, глубину и текущий URL (ОДИН РАЗ)
-	startURL, _ := url.Parse(baseURL)
-	currentURL := startURL  // ← используем ту же переменную, чтобы избежать рассинхрона
-	nextDepth := report.Depth + 1
-	canFollow := nextDepth < opts.Depth
-	
-	// Инициализируем срез
 	report.BrokenLinks = []BrokenLink{}
-	
-	// Дедупликация по точному совпадению
-	seenBroken := make(map[string]struct{})
 
 	for _, link := range links {
 		if ctx.Err() != nil {
 			break
 		}
-
-		parsed, err := url.Parse(link)
-		if err != nil {
-			continue
-		}
-
-		// Пропускаем ссылки на саму страницу
-		if isSamePage(parsed, currentURL) {
-			continue
-		}
-
-		// Если ссылка внутренняя и будет краулиться — не проверяем на битость сейчас
-		isInternal := parsed.Hostname() == startURL.Hostname()
-		if isInternal && canFollow {
-			continue
-		}
-
-		// Дедупликация
-		if _, exists := seenBroken[link]; exists {
-			continue
-		}
-		seenBroken[link] = struct{}{}
-
-		// Проверяем ссылку на доступность
 		if broken := checkLink(ctx, client, limiter, link); broken != nil {
 			report.BrokenLinks = append(report.BrokenLinks, *broken)
 		}
 	}
 
-	// Сортировка для стабильного порядка в JSON
 	sort.Slice(report.BrokenLinks, func(i, j int) bool {
 		return report.BrokenLinks[i].URL < report.BrokenLinks[j].URL
 	})
-
 	return links
 }
 
 // isTemporaryStatus reports whether an HTTP status code indicates a temporary failure.
 func isTemporaryStatus(code int) bool {
 	return code == http.StatusTooManyRequests || (code >= 500 && code < 600)
-}
-
-// canonURL нормализует URL для сравнения (удаляет фрагмент, стандартные порты, приводит путь)
-func canonURL(u *url.URL) string {
-	if u == nil {
-		return ""
-	}
-	cp := *u
-	cp.Fragment = ""
-	// Убираем стандартные порты для консистентности
-	if cp.Scheme == "http" && cp.Port() == "80" {
-		cp.Host = cp.Hostname()
-	} else if cp.Scheme == "https" && cp.Port() == "443" {
-		cp.Host = cp.Hostname()
-	}
-	if cp.Path == "" {
-		cp.Path = "/"
-	}
-	return cp.String()
-}
-
-// isSamePage проверяет, ведут ли два URL на одну и ту же страницу
-func isSamePage(a, b *url.URL) bool {
-	if a == nil || b == nil {
-		return false
-	}
-	return canonURL(a) == canonURL(b)
 }

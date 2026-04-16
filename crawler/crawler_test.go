@@ -183,7 +183,7 @@ func TestAnalyze_BrokenLinks(t *testing.T) {
 	}
 
 	page := report.Pages[0]
-
+    
 	if len(page.BrokenLinks) != 1 {
 		t.Errorf("expected 1 broken link, got %d: %+v", len(page.BrokenLinks), page.BrokenLinks)
 	}
@@ -372,13 +372,6 @@ func TestAnalyze_SEO_Metrics(t *testing.T) {
 			}
 
 			page := report.Pages[0]
-			if page.SEO == nil {
-				if tt.wantHasTitle || tt.wantHasDesc || tt.wantHasH1 {
-					t.Error("expected non-nil SEO, got nil")
-				}
-				return
-			}
-
 			seo := page.SEO
 			if seo.HasTitle != tt.wantHasTitle {
 				t.Errorf("HasTitle = %v, want %v", seo.HasTitle, tt.wantHasTitle)
@@ -936,9 +929,6 @@ func TestAnalyze_JSONStructure(t *testing.T) {
 	}
 	_ = page.Error
 
-	if page.SEO == nil {
-		t.Fatal("page.seo should not be nil")
-	}
 	if !page.SEO.HasTitle || page.SEO.Title != "Test Page" {
 		t.Errorf("SEO title mismatch: %+v", page.SEO)
 	}
