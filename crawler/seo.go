@@ -41,6 +41,9 @@ func extractSEO(doc *html.Node) *SEO {
 
 // extractTitle extracts text content from a <title> element.
 func extractTitle(n *html.Node, seo *SEO) {
+	if seo.HasTitle {
+		return
+	}
 	if n.FirstChild == nil || n.FirstChild.Type != html.TextNode {
 		return
 	}
