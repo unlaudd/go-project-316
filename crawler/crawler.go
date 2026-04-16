@@ -389,17 +389,16 @@ func analyzePageContent(
 
 	links := extractLinks(baseURL, doc)
 	
-	// Определяем хост и глубину для фильтрации
+	// Определяем хост, глубину и текущий URL (ОДИН РАЗ)
 	startURL, _ := url.Parse(baseURL)
+	currentURL := startURL  // ← используем ту же переменную, чтобы избежать рассинхрона
 	nextDepth := report.Depth + 1
 	canFollow := nextDepth < opts.Depth
-	
-	currentURL, _ := url.Parse(baseURL)
 	
 	// Инициализируем срез
 	report.BrokenLinks = []BrokenLink{}
 	
-	// Дедупликация по точному совпадению (extractLinks уже нормализовал)
+	// Дедупликация по точному совпадению
 	seenBroken := make(map[string]struct{})
 
 	for _, link := range links {
@@ -413,13 +412,12 @@ func analyzePageContent(
 		}
 
 		// Пропускаем ссылки на саму страницу
-		if currentURL != nil && isSamePage(parsed, currentURL) {
+		if isSamePage(parsed, currentURL) {
 			continue
 		}
 
-		// ← КЛЮЧЕВОЕ: если ссылка внутренняя и будет краулиться — не проверяем на битость сейчас
-		// Она будет проверена при загрузке самой страницы
-		isInternal := startURL != nil && parsed.Hostname() == startURL.Hostname()
+		// Если ссылка внутренняя и будет краулиться — не проверяем на битость сейчас
+		isInternal := parsed.Hostname() == startURL.Hostname()
 		if isInternal && canFollow {
 			continue
 		}
@@ -449,13 +447,19 @@ func isTemporaryStatus(code int) bool {
 	return code == http.StatusTooManyRequests || (code >= 500 && code < 600)
 }
 
-// canonURL нормализует URL для сравнения (удаляет фрагмент, приводит путь)
+// canonURL нормализует URL для сравнения (удаляет фрагмент, стандартные порты, приводит путь)
 func canonURL(u *url.URL) string {
 	if u == nil {
 		return ""
 	}
 	cp := *u
 	cp.Fragment = ""
+	// Убираем стандартные порты для консистентности
+	if cp.Scheme == "http" && cp.Port() == "80" {
+		cp.Host = cp.Hostname()
+	} else if cp.Scheme == "https" && cp.Port() == "443" {
+		cp.Host = cp.Hostname()
+	}
 	if cp.Path == "" {
 		cp.Path = "/"
 	}
