@@ -381,20 +381,59 @@ func analyzePageContent(
 	}
 
 	links := extractLinks(baseURL, doc)
+	
+	// Определяем хост и глубину
+	startURL, _ := url.Parse(baseURL)
+	nextDepth := report.Depth + 1
+	canFollow := nextDepth < opts.Depth
+	
+	// Инициализируем срез
 	report.BrokenLinks = []BrokenLink{}
+	
+	// Дедупликация по точному совпадению (extractLinks уже нормализовал)
+	seenBroken := make(map[string]struct{})
 
 	for _, link := range links {
 		if ctx.Err() != nil {
 			break
 		}
+
+		parsed, err := url.Parse(link)
+		if err != nil {
+			continue
+		}
+
+		// Пропускаем ссылки на саму страницу
+		if isSamePage(parsed, startURL) {
+			continue
+		}
+
+		// Определяем, внутренняя ли ссылка
+		isInternal := parsed.Hostname() == startURL.Hostname()
+		
+		// ← КЛЮЧЕВОЕ: если ссылка внутренняя и будет краулиться — не проверяем на битость сейчас
+		// Она будет проверена при загрузке самой страницы
+		if isInternal && canFollow {
+			continue
+		}
+
+		// Дедупликация
+		if _, exists := seenBroken[link]; exists {
+			continue
+		}
+		seenBroken[link] = struct{}{}
+
+		// Проверяем ссылку на доступность
 		if broken := checkLink(ctx, client, limiter, link); broken != nil {
 			report.BrokenLinks = append(report.BrokenLinks, *broken)
 		}
 	}
 
+	// Сортировка для стабильного порядка в JSON
 	sort.Slice(report.BrokenLinks, func(i, j int) bool {
 		return report.BrokenLinks[i].URL < report.BrokenLinks[j].URL
 	})
+
 	return links
 }
 
