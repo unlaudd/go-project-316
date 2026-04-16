@@ -42,7 +42,7 @@ type Asset struct {
 	// SizeBytes is the size of the asset in bytes (0 if unknown).
 	SizeBytes int64 `json:"size_bytes"`
 	// Error contains a description of any fetch error (empty on success).
-	Error string `json:"error"`
+	Error      string `json:"error,omitempty"`
 }
 
 // PageReport contains the analysis results for a single crawled page.
