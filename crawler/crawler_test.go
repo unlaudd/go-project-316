@@ -744,7 +744,7 @@ func TestAnalyze_Assets_Deduplication(t *testing.T) {
 		reqMu.Unlock()
 		w.Header().Set("Content-Length", "1234")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("fake image data"))
+		_, _ = w.Write([]byte("fake image data"))
 	})
 
 	server := httptest.NewServer(mux)
@@ -781,7 +781,7 @@ func TestAnalyze_Assets_MissingContentLength(t *testing.T) {
 
 	mux.HandleFunc("/asset.js", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(strings.Repeat("x", 500)))
+		_, _ = w.Write([]byte(strings.Repeat("x", 500)))
 	})
 
 	server := httptest.NewServer(mux)

@@ -413,24 +413,3 @@ func analyzePageContent(
 func isTemporaryStatus(code int) bool {
 	return code == http.StatusTooManyRequests || (code >= 500 && code < 600)
 }
-
-// canonURL normalizes a URL for consistent comparison by removing fragments and standardizing the path.
-func canonURL(u *url.URL) string {
-	if u == nil {
-		return ""
-	}
-	cp := *u
-	cp.Fragment = ""
-	if cp.Path == "" {
-		cp.Path = "/"
-	}
-	return cp.String()
-}
-
-// isSamePage reports whether two URLs refer to the same page, ignoring fragments.
-func isSamePage(a, b *url.URL) bool {
-	if a == nil || b == nil {
-		return false
-	}
-	return canonURL(a) == canonURL(b)
-}
