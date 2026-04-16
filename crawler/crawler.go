@@ -387,10 +387,6 @@ func analyzePageContent(
 		report.Assets = append(report.Assets, *asset)
 	}
 
-	// Дедупликация битых ссылок по нормализованному URL
-	// Определяем хост стартовой страницы для фильтрации внешних ссылок
-	startHost, _ := url.Parse(baseURL)
-
 	// В analyzePageContent — минимальная версия:
 	links := extractLinks(baseURL, doc)
 	report.BrokenLinks = []BrokenLink{} // чтобы в JSON было [], а не null
