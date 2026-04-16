@@ -391,12 +391,25 @@ func analyzePageContent(
 			break
 		}
 		if broken := checkLink(ctx, client, limiter, link); broken != nil {
-			if _, exists := seenBroken[broken.URL]; !exists {
-				seenBroken[broken.URL] = struct{}{}
+			// Нормализуем URL так же, как в extractLinks
+			parsed, err := url.Parse(broken.URL)
+			if err == nil {
+				parsed.Fragment = ""
+				parsed.Path = strings.TrimSuffix(parsed.Path, "/")
+				if parsed.Path == "" {
+					parsed.Path = "/"
+				}
+			}
+			normURL := parsed.String()
+			
+			if _, exists := seenBroken[normURL]; !exists {
+				seenBroken[normURL] = struct{}{}
 				report.BrokenLinks = append(report.BrokenLinks, *broken)
 			}
 		}
 	}
+	fmt.Fprintf(os.Stderr, "DEBUG: Found %d broken links: %+v\n", 
+    len(report.BrokenLinks), report.BrokenLinks)
 	return links
 }
 
