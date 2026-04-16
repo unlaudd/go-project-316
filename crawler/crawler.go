@@ -367,7 +367,7 @@ func analyzePageContent(
 	}
 
 	seo := extractSEO(doc)
-	// ← Всегда копируем данные в существующий report.SEO
+	// ← Всегда копируем значения в существующий объект report.SEO
 	if report.SEO != nil {
 		report.SEO.HasTitle = seo.HasTitle
 		report.SEO.Title = seo.Title
@@ -396,7 +396,7 @@ func analyzePageContent(
 			break
 		}
 		if broken := checkLink(ctx, client, limiter, link); broken != nil {
-			// Используем link напрямую — он уже нормализован в extractLinks
+			// Ключ = link (уже нормализован в extractLinks)
 			if _, exists := seenBroken[link]; !exists {
 				seenBroken[link] = struct{}{}
 				report.BrokenLinks = append(report.BrokenLinks, *broken)
