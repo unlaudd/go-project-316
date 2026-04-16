@@ -246,11 +246,24 @@ func crawlPage(ctx context.Context, client *http.Client, limiter *rate.Limiter, 
 
 	links := analyzePageContent(ctx, client, limiter, assetCache, resp.Body, opts.URL, &report, opts)
 
+	sort.Slice(report.BrokenLinks, func(i, j int) bool {
+		if report.BrokenLinks[i].StatusCode != report.BrokenLinks[j].StatusCode {
+			return report.BrokenLinks[i].StatusCode < report.BrokenLinks[j].StatusCode
+		}
+		if report.BrokenLinks[i].URL != report.BrokenLinks[j].URL {
+			return report.BrokenLinks[i].URL < report.BrokenLinks[j].URL
+		}
+		return report.BrokenLinks[i].Error < report.BrokenLinks[j].Error
+	})
+
 	sort.Slice(report.Assets, func(i, j int) bool {
 		if report.Assets[i].Type != report.Assets[j].Type {
 			return report.Assets[i].Type < report.Assets[j].Type
 		}
-		return report.Assets[i].URL < report.Assets[j].URL
+		if report.Assets[i].URL != report.Assets[j].URL {
+			return report.Assets[i].URL < report.Assets[j].URL
+		}
+		return report.Assets[i].StatusCode < report.Assets[j].StatusCode
 	})
 
 	report.DiscoveredAt = time.Now().UTC()
@@ -363,9 +376,7 @@ func analyzePageContent(
 	}
 
 	seo := extractSEO(doc)
-	if seo.HasTitle || seo.HasDescription || seo.HasH1 {
-		report.SEO = seo
-	}
+	report.SEO = seo
 
 	assets := extractAssets(baseURL, doc)
 	for _, a := range assets {
@@ -378,15 +389,25 @@ func analyzePageContent(
 		report.Assets = append(report.Assets, *asset)
 	}
 
+	brokenMap := make(map[string]BrokenLink)
 	links := extractLinks(baseURL, doc)
+	
 	for _, link := range links {
 		if ctx.Err() != nil {
 			break
 		}
 		if broken := checkLink(ctx, client, limiter, link); broken != nil {
-			report.BrokenLinks = append(report.BrokenLinks, *broken)
+			if _, exists := brokenMap[broken.URL]; !exists {
+				brokenMap[broken.URL] = *broken
+			}
 		}
 	}
+	
+	report.BrokenLinks = nil
+	for _, broken := range brokenMap {
+		report.BrokenLinks = append(report.BrokenLinks, broken)
+	}
+	
 	return links
 }
 
