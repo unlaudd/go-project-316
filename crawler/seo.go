@@ -74,7 +74,7 @@ func extractMetaDescription(n *html.Node, seo *SEO) {
 // extractH1 checks for the presence of a non-empty <h1> element.
 func extractH1(n *html.Node, seo *SEO) {
 	if seo.HasH1 {
-		return // уже нашли, можно не искать дальше
+		return
 	}
 	var h1Text strings.Builder
 	collectText(n, &h1Text)
