@@ -31,8 +31,42 @@ func extractLinks(baseURL string, doc *html.Node) []string {
 		if n.Type == html.ElementNode && n.Data == "a" {
 			for _, attr := range n.Attr {
 				if attr.Key == "href" {
-					if link := processLink(attr.Val, base, seen); link != "" {
-						links = append(links, link)
+					href := strings.TrimSpace(attr.Val)
+					if href == "" || strings.HasPrefix(href, "#") {
+						continue
+					}
+
+					linkURL, err := url.Parse(href)
+					if err != nil {
+						continue
+					}
+
+					// Ignore unsupported schemes
+					if !supportedSchemes[linkURL.Scheme] && linkURL.Scheme != "" {
+						continue
+					}
+
+					// Resolve relative URLs
+					if linkURL.Scheme == "" {
+						linkURL = base.ResolveReference(linkURL)
+					}
+
+					if !linkURL.IsAbs() || !supportedSchemes[linkURL.Scheme] {
+						continue
+					}
+
+					// Normalize URL: remove fragment, strip trailing slash
+					linkURL.Fragment = ""
+					linkURL.Path = strings.TrimSuffix(linkURL.Path, "/")
+					if linkURL.Path == "" {
+						linkURL.Path = "/"
+					}
+					norm := linkURL.String()
+
+					// Deduplicate
+					if _, exists := seen[norm]; !exists {
+						seen[norm] = struct{}{}
+						links = append(links, norm)
 					}
 				}
 			}
@@ -43,6 +77,7 @@ func extractLinks(baseURL string, doc *html.Node) []string {
 	}
 	walk(doc)
 	return links
+
 }
 
 // processLink validates, normalizes, and deduplicates a single link URL.

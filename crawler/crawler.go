@@ -221,6 +221,8 @@ func crawlPage(ctx context.Context, client *http.Client, limiter *rate.Limiter, 
 	report := PageReport{
 		URL:   url,
 		Depth: depth,
+		BrokenLinks: []BrokenLink{},
+		Assets:      []Asset{},
 		SEO:   &SEO{},
 	}
 	
@@ -376,7 +378,9 @@ func analyzePageContent(
 	}
 
 	seo := extractSEO(doc)
-	report.SEO = seo
+	if seo.HasTitle || seo.HasDescription || seo.HasH1 {
+		report.SEO = seo
+	}
 
 	assets := extractAssets(baseURL, doc)
 	for _, a := range assets {
@@ -389,21 +393,23 @@ func analyzePageContent(
 		report.Assets = append(report.Assets, *asset)
 	}
 
-	brokenMap := make(map[string]BrokenLink)
 	links := extractLinks(baseURL, doc)
 	
+
+	brokenMap := make(map[string]BrokenLink)
 	for _, link := range links {
 		if ctx.Err() != nil {
 			break
 		}
 		if broken := checkLink(ctx, client, limiter, link); broken != nil {
+			// Дедупликация по URL
 			if _, exists := brokenMap[broken.URL]; !exists {
 				brokenMap[broken.URL] = *broken
 			}
 		}
 	}
 	
-	report.BrokenLinks = nil
+	report.BrokenLinks = make([]BrokenLink, 0)
 	for _, broken := range brokenMap {
 		report.BrokenLinks = append(report.BrokenLinks, broken)
 	}
