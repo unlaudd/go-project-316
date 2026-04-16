@@ -387,23 +387,55 @@ func analyzePageContent(
 		report.Assets = append(report.Assets, *asset)
 	}
 
-	// В analyzePageContent — минимальная версия:
 	links := extractLinks(baseURL, doc)
-	report.BrokenLinks = []BrokenLink{} // чтобы в JSON было [], а не null
-
-	seenBroken := make(map[string]struct{})
-	for _, link := range links {
-    	if ctx.Err() != nil { break }
-    	if broken := checkLink(ctx, client, limiter, link); broken != nil {
-        	if _, exists := seenBroken[link]; !exists {
-            	seenBroken[link] = struct{}{}
-            	report.BrokenLinks = append(report.BrokenLinks, *broken)
-        	}
-    	}
+	
+	// Определяем хост стартовой страницы и глубину
+	startURL, _ := url.Parse(baseURL)
+	nextDepth := report.Depth + 1  // ← ИСПРАВЛЕНО: используем report.Depth
+	canFollow := nextDepth < opts.Depth
+	
+	// Срез уже инициализирован в crawlPage, но гарантируем
+	if report.BrokenLinks == nil {
+		report.BrokenLinks = []BrokenLink{}
 	}
+	
+	// Дедупликация по каноническому URL
+	seenBroken := make(map[string]struct{})
+
+	for _, link := range links {
+		if ctx.Err() != nil {
+			break
+		}
+
+		parsed, err := url.Parse(link)
+		if err != nil {
+			continue
+		}
+
+		// Определяем, внутренняя ли ссылка
+		isInternal := startURL != nil && parsed.Hostname() == startURL.Hostname()
+		
+		// Если ссылка внутренняя и будет загружена как страница — не проверяем на битость сейчас
+		if isInternal && canFollow {
+			continue
+		}
+
+		// Проверяем ссылку на доступность
+		if broken := checkLink(ctx, client, limiter, link); broken != nil {
+			// Дедупликация по нормализованному URL
+			key := normalizeURL(link)
+			if _, exists := seenBroken[key]; !exists {
+				seenBroken[key] = struct{}{}
+				report.BrokenLinks = append(report.BrokenLinks, *broken)
+			}
+		}
+	}
+
+	// Сортировка для стабильного порядка в JSON
 	sort.Slice(report.BrokenLinks, func(i, j int) bool {
-    	return report.BrokenLinks[i].URL < report.BrokenLinks[j].URL
+		return report.BrokenLinks[i].URL < report.BrokenLinks[j].URL
 	})
+
 	return links
 }
 
