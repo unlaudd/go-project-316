@@ -396,7 +396,6 @@ func analyzePageContent(
 	// Инициализируем срез явно, чтобы JSON всегда содержал [], а не null
 	report.BrokenLinks = []BrokenLink{}
 	
-	startHost, _ := url.Parse(baseURL)
 	seenBroken := make(map[string]struct{})
 
 	for _, link := range links {
