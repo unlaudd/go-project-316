@@ -31,7 +31,6 @@ func extractLinks(baseURL string, doc *html.Node) []string {
 		if n.Type == html.ElementNode && n.Data == "a" {
 			for _, attr := range n.Attr {
 				if attr.Key == "href" {
-					// 🆕 Вызываем вынесенную функцию обработки ссылки
 					if link := processLink(attr.Val, base, seen); link != "" {
 						links = append(links, link)
 					}
