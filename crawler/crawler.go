@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"os"
 
 	"golang.org/x/net/html"
 	"golang.org/x/time/rate"
