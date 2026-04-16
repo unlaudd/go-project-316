@@ -389,17 +389,13 @@ func analyzePageContent(
 
 	links := extractLinks(baseURL, doc)
 	
-	// Определяем хост стартовой страницы и глубину
-	startURL, _ := url.Parse(baseURL)
-	nextDepth := report.Depth + 1  // ← ИСПРАВЛЕНО: используем report.Depth
-	canFollow := nextDepth < opts.Depth
+	// Инициализируем срез
+	report.BrokenLinks = []BrokenLink{}
 	
-	// Срез уже инициализирован в crawlPage, но гарантируем
-	if report.BrokenLinks == nil {
-		report.BrokenLinks = []BrokenLink{}
-	}
+	// Парсим текущий URL для сравнения
+	currentURL, _ := url.Parse(baseURL)
 	
-	// Дедупликация по каноническому URL
+	// Дедупликация по точному совпадению
 	seenBroken := make(map[string]struct{})
 
 	for _, link := range links {
@@ -412,22 +408,23 @@ func analyzePageContent(
 			continue
 		}
 
-		// Определяем, внутренняя ли ссылка
-		isInternal := startURL != nil && parsed.Hostname() == startURL.Hostname()
-		
-		// Если ссылка внутренняя и будет загружена как страница — не проверяем на битость сейчас
-		if isInternal && canFollow {
+		// ← КЛЮЧЕВОЕ: пропускаем ссылки на саму страницу
+		// (как в референсном коде: isSamePage)
+		if currentURL != nil {
+			if isSamePage(parsed, currentURL) {
+				continue
+			}
+		}
+
+		// Пропускаем дубликаты
+		if _, exists := seenBroken[link]; exists {
 			continue
 		}
+		seenBroken[link] = struct{}{}
 
 		// Проверяем ссылку на доступность
 		if broken := checkLink(ctx, client, limiter, link); broken != nil {
-			// Дедупликация по нормализованному URL
-			key := normalizeURL(link)
-			if _, exists := seenBroken[key]; !exists {
-				seenBroken[key] = struct{}{}
-				report.BrokenLinks = append(report.BrokenLinks, *broken)
-			}
+			report.BrokenLinks = append(report.BrokenLinks, *broken)
 		}
 	}
 
@@ -442,4 +439,25 @@ func analyzePageContent(
 // isTemporaryStatus reports whether an HTTP status code indicates a temporary failure.
 func isTemporaryStatus(code int) bool {
 	return code == http.StatusTooManyRequests || (code >= 500 && code < 600)
+}
+
+// canonURL нормализует URL для сравнения (удаляет фрагмент, приводит путь)
+func canonURL(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	cp := *u
+	cp.Fragment = ""
+	if cp.Path == "" {
+		cp.Path = "/"
+	}
+	return cp.String()
+}
+
+// isSamePage проверяет, ведут ли два URL на одну и ту же страницу
+func isSamePage(a, b *url.URL) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	return canonURL(a) == canonURL(b)
 }
