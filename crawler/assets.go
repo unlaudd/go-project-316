@@ -73,24 +73,6 @@ func detectAssetType(tagName string, attrs map[string]string) string {
 	return typeOther
 }
 
-// isAssetTag reports whether the given tag name represents a loadable asset.
-func isAssetTag(tagName string) bool {
-	return tagName == tagImg || tagName == tagScript || tagName == tagLink
-}
-
-// getAssetSrc extracts the source URL from tag attributes.
-func getAssetSrc(tagName string, attrs map[string]string) string {
-	switch tagName {
-	case tagImg, tagScript:
-		return attrs[attrSrc]
-	case tagLink:
-		if strings.ToLower(attrs[attrRel]) == attrRelStylesheet {
-			return attrs[attrHref]
-		}
-	}
-	return ""
-}
-
 // resolveAssetURL validates and normalizes a relative or absolute asset URL.
 // Returns the normalized absolute URL and true if valid, or empty string and false otherwise.
 func resolveAssetURL(src, baseURL string) (string, bool) {
@@ -125,48 +107,6 @@ type assetInfo struct {
 	url   string
 	tag   string
 	attrs map[string]string
-}
-
-// extractAssets parses an HTML document and returns a list of loadable assets.
-func extractAssets(baseURL string, doc *html.Node) []assetInfo {
-	var assets []assetInfo
-
-	var walk func(*html.Node)
-	walk = func(n *html.Node) {
-		if n.Type != html.ElementNode {
-			for c := n.FirstChild; c != nil; c = c.NextSibling {
-				walk(c)
-			}
-			return
-		}
-
-		if !isAssetTag(n.Data) {
-			for c := n.FirstChild; c != nil; c = c.NextSibling {
-				walk(c)
-			}
-			return
-		}
-
-		attrs := make(map[string]string)
-		for _, a := range n.Attr {
-			attrs[strings.ToLower(a.Key)] = a.Val
-		}
-
-		src := getAssetSrc(n.Data, attrs)
-		if resolvedURL, ok := resolveAssetURL(src, baseURL); ok {
-			assets = append(assets, assetInfo{
-				url:   resolvedURL,
-				tag:   n.Data,
-				attrs: attrs,
-			})
-		}
-
-		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			walk(c)
-		}
-	}
-	walk(doc)
-	return assets
 }
 
 // doAssetRequest performs a single HTTP request with the given method and user agent.
@@ -292,4 +232,39 @@ func normalizeURLForCache(raw string) string {
 		u.Path = "/"
 	}
 	return u.String()
+}
+
+// getAssetSrc extracts the source URL from tag attributes.
+// Used by single-pass asset extraction to avoid redundant parsing.
+func getAssetSrc(tagName string, attrs map[string]string) string {
+	switch tagName {
+	case tagImg, tagScript:
+		return attrs[attrSrc]
+	case tagLink:
+		if strings.ToLower(attrs[attrRel]) == attrRelStylesheet {
+			return attrs[attrHref]
+		}
+	}
+	return ""
+}
+
+// extractAssetInfo extracts asset metadata from a single HTML node.
+// Designed for single-pass DOM parsing to avoid redundant traversals.
+func extractAssetInfo(n *html.Node, baseURL string, seen map[string]struct{}) *assetInfo {
+	tagName := n.Data
+	attrs := make(map[string]string)
+	for _, a := range n.Attr {
+		attrs[strings.ToLower(a.Key)] = a.Val
+	}
+
+	src := getAssetSrc(tagName, attrs)
+	if resolvedURL, ok := resolveAssetURL(src, baseURL); ok {
+		key := detectAssetType(tagName, attrs) + "::" + resolvedURL
+		if _, exists := seen[key]; exists {
+			return nil
+		}
+		seen[key] = struct{}{}
+		return &assetInfo{url: resolvedURL, tag: tagName, attrs: attrs}
+	}
+	return nil
 }

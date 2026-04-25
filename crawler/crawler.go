@@ -370,10 +370,10 @@ func analyzePageContent(
 		return nil
 	}
 
-	seo := extractSEO(doc)
+	// ← ОДИН ПРОХОД по дереву вместо трёх
+	seo, assets, links := parseDocument(doc, baseURL)
 	report.SEO = seo
 
-	assets := extractAssets(baseURL, doc)
 	for _, a := range assets {
 		if ctx.Err() != nil {
 			break
@@ -384,9 +384,7 @@ func analyzePageContent(
 		report.Assets = append(report.Assets, *asset)
 	}
 
-	links := extractLinks(baseURL, doc)
-
-	// Deduplicate broken links by exact URL match.
+	// Дедупликация битых ссылок по точному совпадению
 	seenBroken := make(map[string]struct{})
 
 	for _, link := range links {
@@ -401,7 +399,6 @@ func analyzePageContent(
 		}
 	}
 
-	// Sort broken links by URL for stable JSON output.
 	sort.Slice(report.BrokenLinks, func(i, j int) bool {
 		return report.BrokenLinks[i].URL < report.BrokenLinks[j].URL
 	})
@@ -412,4 +409,54 @@ func analyzePageContent(
 // Status codes 429 (Too Many Requests) and 5xx (Server Errors) are considered temporary.
 func isTemporaryStatus(code int) bool {
 	return code == http.StatusTooManyRequests || (code >= 500 && code < 600)
+}
+
+// parseDocument walks the HTML tree exactly once, extracting SEO metadata, assets, and links.
+// Replaces three separate traversals with a single pass for better performance.
+func parseDocument(doc *html.Node, baseURL string) (SEO, []assetInfo, []string) {
+	var seo SEO
+	var assets []assetInfo
+	var links []string
+
+	base, _ := url.Parse(baseURL)
+	seenLinks := make(map[string]struct{})
+	seenAssets := make(map[string]struct{})
+
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type != html.ElementNode {
+			for c := n.FirstChild; c != nil; c = c.NextSibling {
+				walk(c)
+			}
+			return
+		}
+
+		switch n.Data {
+		case "title":
+			extractTitle(n, &seo)
+		case "meta":
+			extractMetaDescription(n, &seo)
+		case "h1":
+			extractH1(n, &seo)
+		case "a":
+			for _, attr := range n.Attr {
+				if attr.Key == "href" {
+					if link := processLink(attr.Val, base, seenLinks); link != "" {
+						links = append(links, link)
+					}
+					break
+				}
+			}
+		case "img", "script", "link":
+			if info := extractAssetInfo(n, baseURL, seenAssets); info != nil {
+				assets = append(assets, *info)
+			}
+		}
+
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(doc)
+	return seo, assets, links
 }

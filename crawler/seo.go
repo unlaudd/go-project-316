@@ -7,39 +7,6 @@ import (
 	"golang.org/x/net/html"
 )
 
-// extractSEO parses an HTML document and extracts basic SEO metadata.
-// It looks for <title>, <meta name="description">, and <h1> tags.
-// Returns an SEO value with extracted data (empty fields if not found).
-func extractSEO(doc *html.Node) SEO {
-	seo := SEO{}
-
-	var walk func(*html.Node)
-	walk = func(n *html.Node) {
-		if n.Type != html.ElementNode {
-			for c := n.FirstChild; c != nil; c = c.NextSibling {
-				walk(c)
-			}
-			return
-		}
-
-		switch n.Data {
-		case "title":
-			extractTitle(n, &seo)
-		case "meta":
-			extractMetaDescription(n, &seo)
-		case "h1":
-			extractH1(n, &seo)
-		}
-
-		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			walk(c)
-		}
-	}
-	walk(doc)
-
-	return seo
-}
-
 // extractTitle extracts text content from a <title> element.
 // It sets HasTitle and Title fields in the provided SEO struct if a non-empty title is found.
 // The function returns early if HasTitle is already true to avoid overwriting.

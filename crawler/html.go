@@ -4,8 +4,6 @@ package crawler
 import (
 	"net/url"
 	"strings"
-
-	"golang.org/x/net/html"
 )
 
 // supportedSchemes lists the URL schemes that the crawler processes.
@@ -13,36 +11,6 @@ import (
 var supportedSchemes = map[string]bool{
 	"http":  true,
 	"https": true,
-}
-
-// extractLinks parses an HTML document and returns a list of absolute HTTP(S) links.
-// Links are normalized and deduplicated to prevent checking the same resource twice.
-func extractLinks(baseURL string, doc *html.Node) []string {
-	var links []string
-	base, err := url.Parse(baseURL)
-	if err != nil {
-		return links
-	}
-
-	seen := make(map[string]struct{})
-
-	var walk func(*html.Node)
-	walk = func(n *html.Node) {
-		if n.Type == html.ElementNode && n.Data == "a" {
-			for _, attr := range n.Attr {
-				if attr.Key == "href" {
-					if link := processLink(attr.Val, base, seen); link != "" {
-						links = append(links, link)
-					}
-				}
-			}
-		}
-		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			walk(c)
-		}
-	}
-	walk(doc)
-	return links
 }
 
 // processLink validates, normalizes, and deduplicates a single link URL.
